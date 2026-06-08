@@ -1003,6 +1003,7 @@ class App(tk.Tk):
 
         self._build_layout()
         self.refresh_relations_table()
+        self.after(120, self.force_initial_paint)
         self.log(f"{APP_TITLE} 已启动")
         self.log(f"根目录：{ROOT}")
 
@@ -1020,13 +1021,25 @@ class App(tk.Tk):
         self.style.configure("Sub.TLabel", background=bg, foreground="#9fb5c7", font=("Microsoft YaHei UI", 10))
         self.style.configure("Panel.TLabel", background=panel, foreground=fg, font=("Microsoft YaHei UI", 10))
         self.style.configure("Card.TLabel", background=panel2, foreground=fg, font=("Microsoft YaHei UI", 10))
-        self.style.configure("TButton", font=("Microsoft YaHei UI", 10), padding=(10, 6))
-        self.style.configure("Accent.TButton", font=("Microsoft YaHei UI", 11, "bold"), padding=(12, 8))
+        self.style.configure("TButton", background="#24445e", foreground="#f4fbff", font=("Microsoft YaHei UI", 10), padding=(10, 6))
+        self.style.configure("Accent.TButton", background="#2f81b7", foreground="#ffffff", font=("Microsoft YaHei UI", 11, "bold"), padding=(12, 8))
         self.style.configure("TEntry", fieldbackground="#14283a", foreground="#f4fbff", insertcolor="#5fd0ff")
         self.style.configure("TCombobox", fieldbackground="#14283a", foreground="#f4fbff", arrowcolor="#5fd0ff")
         self.style.configure("Treeview", background="#101c28", fieldbackground="#101c28", foreground="#e8f3f8", rowheight=27, font=("Microsoft YaHei UI", 9))
         self.style.configure("Treeview.Heading", background="#203347", foreground="#9fe4ff", font=("Microsoft YaHei UI", 10, "bold"))
+        self.style.map("TButton", background=[("active", "#2f5f82"), ("pressed", "#1f405a"), ("disabled", "#1f3448"), ("!disabled", "#24445e")], foreground=[("disabled", "#b9c8d4"), ("!disabled", "#f4fbff")])
+        self.style.map("Accent.TButton", background=[("active", "#3c94cf"), ("pressed", "#226d9c"), ("disabled", "#28516c"), ("!disabled", "#2f81b7")], foreground=[("disabled", "#d7e7f2"), ("!disabled", "#ffffff")])
+        self.style.map("TEntry", fieldbackground=[("disabled", "#14283a"), ("readonly", "#14283a"), ("focus", "#183149"), ("!disabled", "#14283a")], foreground=[("disabled", "#d5e6f2"), ("readonly", "#f4fbff"), ("!disabled", "#f4fbff")])
+        self.style.map("TCombobox", fieldbackground=[("disabled", "#14283a"), ("readonly", "#14283a"), ("focus", "#183149"), ("!disabled", "#14283a")], foreground=[("disabled", "#d5e6f2"), ("readonly", "#f4fbff"), ("!disabled", "#f4fbff")])
         self.style.map("Treeview", background=[("selected", "#2c6f9e")], foreground=[("selected", "#ffffff")])
+
+    def force_initial_paint(self):
+        try:
+            self.setup_style()
+            self.update_idletasks()
+            self.focus_force()
+        except Exception:
+            pass
 
     def _build_layout(self):
         top = tk.Frame(self, bg="#0a1119", height=62)
