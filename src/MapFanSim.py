@@ -43,7 +43,7 @@ from tkinter import ttk, filedialog, messagebox
 APP_NAME = "MapFanSim"
 APP_TITLE = "MapFanSim 全场风机 MAP 仿真工具"
 APP_VERSION = "V8-HTA-LikeLayout"
-GITHUB_REPOSITORY = "https://github.com/qq1371989309-prog/map-.git"
+GITHUB_REPOSITORY = "https://github.com/qssec1"
 GITEE_REPOSITORY = "https://gitee.com/qssec/map"
 PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/raw/master/artifacts/MapFanSim-windows-x64.zip"
 
@@ -1022,8 +1022,8 @@ class App(tk.Tk):
         self.style.configure("Card.TLabel", background=panel2, foreground=fg, font=("Microsoft YaHei UI", 10))
         self.style.configure("TButton", font=("Microsoft YaHei UI", 10), padding=(10, 6))
         self.style.configure("Accent.TButton", font=("Microsoft YaHei UI", 11, "bold"), padding=(12, 8))
-        self.style.configure("TEntry", fieldbackground="#0d1824", foreground="#f4fbff", insertcolor="#5fd0ff")
-        self.style.configure("TCombobox", fieldbackground="#0d1824", foreground="#f4fbff", arrowcolor="#5fd0ff")
+        self.style.configure("TEntry", fieldbackground="#14283a", foreground="#f4fbff", insertcolor="#5fd0ff")
+        self.style.configure("TCombobox", fieldbackground="#14283a", foreground="#f4fbff", arrowcolor="#5fd0ff")
         self.style.configure("Treeview", background="#101c28", fieldbackground="#101c28", foreground="#e8f3f8", rowheight=27, font=("Microsoft YaHei UI", 9))
         self.style.configure("Treeview.Heading", background="#203347", foreground="#9fe4ff", font=("Microsoft YaHei UI", 10, "bold"))
         self.style.map("Treeview", background=[("selected", "#2c6f9e")], foreground=[("selected", "#ffffff")])
@@ -1034,9 +1034,9 @@ class App(tk.Tk):
         top.pack_propagate(False)
         tk.Label(top, text="MapFanSim", bg="#0a1119", fg="#5fd0ff", font=("Consolas", 22, "bold")).pack(side=tk.LEFT, padx=22)
         tk.Label(top, text="本地处理清晰优先，云端操作独立执行", bg="#0a1119", fg="#9fb5c7", font=("Microsoft YaHei UI", 10)).pack(side=tk.LEFT, padx=8)
-        repo_link = tk.Label(top, text="Gitee: qssec/map", bg="#0a1119", fg="#6fb8ff", cursor="hand2", font=("Consolas", 9, "underline"))
+        repo_link = tk.Label(top, text="GitHub: qssec1", bg="#0a1119", fg="#6fb8ff", cursor="hand2", font=("Consolas", 9, "underline"))
         repo_link.pack(side=tk.RIGHT, padx=(8, 20))
-        repo_link.bind("<Button-1>", lambda _e: webbrowser.open(GITEE_REPOSITORY))
+        repo_link.bind("<Button-1>", lambda _e: webbrowser.open(GITHUB_REPOSITORY))
         tk.Label(top, text="玄度技术支持", bg="#0a1119", fg="#8be0b3", font=("Microsoft YaHei UI", 10)).pack(side=tk.RIGHT, padx=20)
 
         main = tk.Frame(self, bg="#0f1720")
@@ -1240,7 +1240,7 @@ class App(tk.Tk):
     def _create_log_panel(self, parent, title):
         log_card = self.card(parent, title)
         log_card.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(0, 12))
-        txt = tk.Text(log_card, height=6, bg="#080d12", fg="#8be0b3", insertbackground="#5fd0ff", font=("Consolas", 10))
+        txt = tk.Text(log_card, height=6, bg="#12263a", fg="#eaf7ff", insertbackground="#5fd0ff", font=("Consolas", 10))
         txt.pack(fill=tk.X, expand=False)
         self.log_text_widgets.append(txt)
         self.log_text = txt
@@ -1363,7 +1363,7 @@ class App(tk.Tk):
 
         log_card = self.card(p, "运行日志（本地 / 云端）")
         log_card.pack(side=tk.BOTTOM, fill=tk.X, padx=24, pady=(0, 12))
-        self.log_text = tk.Text(log_card, height=6, bg="#080d12", fg="#8be0b3", insertbackground="#5fd0ff", font=("Consolas", 10))
+        self.log_text = tk.Text(log_card, height=6, bg="#12263a", fg="#eaf7ff", insertbackground="#5fd0ff", font=("Consolas", 10))
         self.log_text.pack(fill=tk.X, expand=False)
         log_btns = tk.Frame(log_card, bg="#152231")
         log_btns.pack(fill=tk.X, pady=(8, 0))
@@ -1478,7 +1478,7 @@ class App(tk.Tk):
 
         c2 = self.card(p, "底部额外项 / 特殊行")
         c2.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
-        self.extra_text = tk.Text(c2, height=10, bg="#0d1824", fg="#e8f3f8", insertbackground="#5fd0ff", font=("Consolas", 10))
+        self.extra_text = tk.Text(c2, height=10, bg="#14283a", fg="#f4fbff", insertbackground="#5fd0ff", font=("Consolas", 10))
         self.extra_text.pack(fill=tk.BOTH, expand=True)
         self.extra_text.insert("1.0", self.extra_text_cache)
         btns = tk.Frame(c2, bg="#152231")
@@ -1560,7 +1560,7 @@ class App(tk.Tk):
         self._label_entry(c, "服务器目录", self.var_remoteDir, row); row += 1
         self._label_entry(c, "服务器文件", self.var_remoteFile, row); row += 1
         self._label_entry(c, "Host Key 可空", self.var_hostKey, row); row += 1
-        tk.Checkbutton(c, text="排除 IEMP 行", variable=self.var_excludeIemp, bg="#152231", fg="#e8f3f8", selectcolor="#0d1824", activebackground="#152231", activeforeground="#ffffff").grid(row=row, column=1, sticky="w", padx=8, pady=6); row += 1
+        tk.Checkbutton(c, text="排除 IEMP 行", variable=self.var_excludeIemp, bg="#152231", fg="#e8f3f8", selectcolor="#14283a", activebackground="#152231", activeforeground="#ffffff").grid(row=row, column=1, sticky="w", padx=8, pady=6); row += 1
 
         c2 = self.card(left, "备用工具目录")
         c2.pack(fill=tk.X)
@@ -1621,7 +1621,7 @@ class App(tk.Tk):
 
         c2 = self.card(p, "字段要求")
         c2.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
-        txt = tk.Text(c2, bg="#0d1824", fg="#e8f3f8", font=("Consolas", 10), wrap="word")
+        txt = tk.Text(c2, bg="#14283a", fg="#f4fbff", font=("Consolas", 10), wrap="word")
         txt.pack(fill=tk.BOTH, expand=True)
         txt.insert("1.0", "device_maps.csv 必须包含这些列：\n\nfan,line_no,addr,col2,col3,desc,exclude\n\n说明：\n- fan：风机号，例如 F1-01FJ\n- line_no：MAP 文件行号，1 起始\n- addr：地址或唯一标识\n- col2/col3：用于匹配本机与目标的关键字段\n- desc：说明，包含 IEMP 时可被排除\n- exclude：1 表示强制排除\n\n仿真逻辑：\n程序按 col2 + col3 + addr 建索引，找到本机风机和目标风机的对应行，只替换本机 MAP 对应行的第一个字段，并生成 CSV 对比报告。\n")
         txt.config(state="disabled")
@@ -1629,7 +1629,7 @@ class App(tk.Tk):
     def _create_logs_page(self):
         p = self.make_page("logs")
         ttk.Label(p, text="运行日志", style="Title.TLabel").pack(anchor="w", padx=24, pady=(22, 4))
-        self.log_text = tk.Text(p, bg="#080d12", fg="#8be0b3", insertbackground="#5fd0ff", font=("Consolas", 10))
+        self.log_text = tk.Text(p, bg="#12263a", fg="#eaf7ff", insertbackground="#5fd0ff", font=("Consolas", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=24, pady=12)
         bottom = tk.Frame(p, bg="#0f1720")
         bottom.pack(fill=tk.X, padx=24, pady=(0, 12))
@@ -1645,7 +1645,7 @@ class App(tk.Tk):
         ttk.Label(link_bar, text=PRODUCT_DOWNLOAD_URL, style="Sub.TLabel").pack(side=tk.LEFT, padx=12)
         c = self.card(p, "现场使用")
         c.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
-        txt = tk.Text(c, bg="#0d1824", fg="#e8f3f8", font=("Microsoft YaHei UI", 11), wrap="word")
+        txt = tk.Text(c, bg="#14283a", fg="#f4fbff", font=("Microsoft YaHei UI", 11), wrap="word")
         txt.pack(fill=tk.BOTH, expand=True)
         txt.insert("1.0", f"""
 一、第一次使用
