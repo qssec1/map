@@ -43,7 +43,7 @@ from tkinter import ttk, filedialog, messagebox
 APP_NAME = "MapFanSim"
 APP_TITLE = "MapFanSim 全场风机 MAP 仿真工具"
 APP_VERSION = "V8-HTA-LikeLayout"
-GITHUB_REPOSITORY = "https://github.com/qssec1"
+GITHUB_REPOSITORY = "https://github.com/qssec1/map.git"
 GITEE_REPOSITORY = "https://gitee.com/qssec/map"
 PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/raw/master/artifacts/MapFanSim-windows-x64.zip"
 

@@ -104,7 +104,7 @@ MapFanSim.exe
 源码仓库：
 
 - 码云：[https://gitee.com/qssec/map](https://gitee.com/qssec/map)
-- GitHub：[https://github.com/qssec1](https://github.com/qssec1)
+- GitHub：[https://github.com/qssec1/map.git](https://github.com/qssec1/map.git)
 
 ## 配置说明
 
