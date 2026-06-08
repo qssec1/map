@@ -99,7 +99,7 @@ MapFanSim.exe
 
 码云成品包：
 
-[MapFanSim-windows-x64.zip](https://gitee.com/qssec/map/raw/master/artifacts/MapFanSim-windows-x64.zip)
+[MapFanSim-windows-x64.zip](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip)
 
 源码仓库：
 
