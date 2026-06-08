@@ -1,5 +1,7 @@
 # 构建与发布
 
+说明：PowerShell 5.1 或更高版本只用于开发者构建发布包。现场电脑运行已经打包好的 `MapFanSim.exe` 时，不需要安装 Python，也不需要安装 PowerShell。
+
 ## 1. 安装依赖
 
 ```powershell
@@ -46,7 +48,7 @@ Compress-Archive -Path release\MapFanSim\* -DestinationPath artifacts\MapFanSim-
 码云下载地址：
 
 ```text
-https://gitee.com/qssec/map/raw/master/artifacts/MapFanSim-windows-x64.zip
+https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip
 ```
 
 发布包包含：
@@ -70,6 +72,8 @@ https://gitee.com/qssec/map/raw/master/artifacts/MapFanSim-windows-x64.zip
 2. 双击运行 `MapFanSim.exe`。
 3. 在“设置”页面填写现场服务器连接信息。
 4. 使用“测试连接”验证服务器目录和 `slaverMB_1.map` 是否可访问。
+
+现场电脑不需要执行 `.ps1` 脚本，也不需要 PowerShell 5.1。
 
 ## 5. 清理构建产物
 

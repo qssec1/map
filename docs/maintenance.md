@@ -40,6 +40,8 @@
 4. 启动 `release\MapFanSim\MapFanSim.exe` 做基础验证。
 5. 将 `release\MapFanSim` 交付现场。
 
+注意：PowerShell 只用于第 3 步构建。现场电脑拿到 `release\MapFanSim` 后直接运行 `MapFanSim.exe`，不需要 Python 或 PowerShell。
+
 ## 4. 服务器文件约束
 
 服务器生效文件名固定为：

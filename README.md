@@ -48,9 +48,18 @@ slaverMB_1.map
 └── requirements.txt              # 开发和打包依赖
 ```
 
-## 开发环境
+## 现场运行环境
 
-推荐环境：
+现场电脑运行成品包时，只需要 Windows 系统并双击 `MapFanSim.exe`。
+
+- 不需要安装 Python。
+- 不需要安装 PowerShell。
+- 不需要安装 .NET 或 HTA 运行环境。
+- 如需使用 WinSCP、FlashFXP、OMTG 等第三方工具，只需要把对应工具放到 `tools` 或在设置中填写路径。
+
+## 开发/打包环境
+
+以下环境只用于源码开发和重新打包，现场用户运行成品不需要：
 
 - Windows 10/11
 - Python 3.10
@@ -94,6 +103,8 @@ release\MapFanSim
 ```text
 MapFanSim.exe
 ```
+
+现场电脑不需要 PowerShell 5.1；PowerShell 只用于开发者执行 `scripts` 下的构建脚本。
 
 ## 成品下载
 
