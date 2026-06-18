@@ -1,0 +1,44 @@
+﻿{
+    "profileVersion":  1,
+    "windFarmName":  "西沟",
+    "description":  "Xigou IEC104 profile. Use Device_1_5 only: XLS point column maps to MAP address column 5; key columns are 1 and 5; replace MAP column 1 global id.",
+    "deviceMapFormat":  {
+                            "type":  "fan_address_list",
+                            "comment":  "device_maps.csv is pre-generated from Device_1_5. One row per fan; EMS701 station rows are excluded.",
+                            "sheetNames":  [
+                                               "*"
+                                           ],
+                            "headerRows":  0,
+                            "fanColumn":  0,
+                            "addressStartColumn":  1,
+                            "addressColumn":  1,
+                            "excludeTailAddressCount":  0,
+                            "skipIfRowContains":  [
+                                                      "IEMP"
+                                                  ]
+                        },
+    "mapParser":  {
+                      "comment":  "slaver104_1.map: col3=1, col4=5, col5=Device_1_5 point address; replace col1 global id.",
+                      "delimiter":  ",",
+                      "keyColumnIndexes":  [
+                                               2,
+                                               3
+                                           ],
+                      "keyFixedValues":  [
+                                             "1",
+                                             "5"
+                                         ],
+                      "addressColumnIndex":  4,
+                      "replaceColumnIndex":  0,
+                      "skipTerms":  [
+                                        "IEMP"
+                                    ]
+                  },
+    "extraRules":  {
+                       "enabled":  true,
+                       "file":  "extra_rules.txt",
+                       "replaceColumnIndex":  0,
+                       "lineNumberBase":  1
+                   },
+    "remoteFile":  "slaver104_1.map"
+}

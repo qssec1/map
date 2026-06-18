@@ -2980,6 +2980,7 @@ def _default_rule_profile(name: Optional[str] = None) -> Dict[str, Any]:
         "profileVersion": 1,
         "windFarmName": farm,
         "description": "默认规则模板：兼容红山嘴风电一场和前面 HTA 最后版逻辑。正常只维护本文件和 device_maps.csv，不改源码。",
+        "remoteFile": "slaverMB_1.map",
         "deviceMapFormat": {
             "type": "fan_address_list",
             "comment": "fan_address_list 表示每行：风机名,地址1,地址2,...。如果其他风场规则表结构不同，改 type 和下面列号即可。",
@@ -3401,6 +3402,13 @@ def _v6_switch_wind_farm(self):
     if not name:
         return
     set_current_wind_farm(name)
+    profile = load_rule_profile(get_current_wind_farm())
+    remote_file = str(profile.get("remoteFile", "")).strip()
+    if remote_file:
+        self.cfg.remoteFile = remote_file
+        if hasattr(self, "var_remoteFile"):
+            self.var_remoteFile.set(remote_file)
+        save_config(self.cfg)
     self.local_relations = load_relations_for_scope("local")
     self.cloud_relations = load_relations_for_scope("cloud")
     self.relations = self.cloud_relations if getattr(self, "relation_scope", "local") == "cloud" else self.local_relations
@@ -3414,6 +3422,8 @@ def _v6_switch_wind_farm(self):
         self.wind_farm_info_var.set(wind_farm_summary())
     self.log(f"已切换风场规则：{get_current_wind_farm()}，规则目录：{get_current_farm_dir()}")
     self.log(f"规则模板：{farm_rule_profile_path()}")
+    if remote_file:
+        self.log(f"已按当前风场同步服务器文件名：{remote_file}")
 
 
 def _v6_import_mapping_gui(self):
