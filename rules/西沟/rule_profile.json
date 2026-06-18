@@ -1,44 +1,44 @@
-﻿{
-    "profileVersion":  1,
-    "windFarmName":  "西沟",
-    "description":  "Xigou IEC104 profile. Use Device_1_5 only: XLS point column maps to MAP address column 5; key columns are 1 and 5; replace MAP column 1 global id.",
-    "deviceMapFormat":  {
-                            "type":  "fan_address_list",
-                            "comment":  "device_maps.csv is pre-generated from Device_1_5. One row per fan; EMS701 station rows are excluded.",
-                            "sheetNames":  [
-                                               "*"
-                                           ],
-                            "headerRows":  0,
-                            "fanColumn":  0,
-                            "addressStartColumn":  1,
-                            "addressColumn":  1,
-                            "excludeTailAddressCount":  0,
-                            "skipIfRowContains":  [
-                                                      "IEMP"
-                                                  ]
-                        },
-    "mapParser":  {
-                      "comment":  "slaver104_1.map: col3=1, col4=5, col5=Device_1_5 point address; replace col1 global id.",
-                      "delimiter":  ",",
-                      "keyColumnIndexes":  [
-                                               2,
-                                               3
-                                           ],
-                      "keyFixedValues":  [
-                                             "1",
-                                             "5"
-                                         ],
-                      "addressColumnIndex":  4,
-                      "replaceColumnIndex":  0,
-                      "skipTerms":  [
-                                        "IEMP"
-                                    ]
-                  },
-    "extraRules":  {
-                       "enabled":  true,
-                       "file":  "extra_rules.txt",
-                       "replaceColumnIndex":  0,
-                       "lineNumberBase":  1
-                   },
-    "remoteFile":  "slaver104_1.map"
+{
+  "profileVersion": 1,
+  "windFarmName": "西沟",
+  "remoteFile": "slaver104_1.map",
+  "description": "西沟 IEC104 规则。只使用 IEC104Table.xls 的 Device_1_5：XLS 第4列“点号”对应 MAP 第5列地址；MAP 固定匹配第3列=1、第4列=5；只替换 MAP 第1列全局编号。",
+  "deviceMapFormat": {
+    "type": "fan_address_list",
+    "comment": "device_maps.csv 已由 Device_1_5 预生成。每行：风机名,点号地址1,点号地址2,...。EMS701 场站点不参与风机互仿。",
+    "sheetNames": [
+      "*"
+    ],
+    "headerRows": 0,
+    "fanColumn": 0,
+    "addressStartColumn": 1,
+    "addressColumn": 1,
+    "excludeTailAddressCount": 0,
+    "skipIfRowContains": [
+      "IEMP"
+    ]
+  },
+  "mapParser": {
+    "comment": "西沟 slaver104_1.map：第3列=1、第4列=5、第5列=Device_1_5 点号地址；替换第1列全局编号。",
+    "delimiter": ",",
+    "keyColumnIndexes": [
+      2,
+      3
+    ],
+    "keyFixedValues": [
+      "1",
+      "5"
+    ],
+    "addressColumnIndex": 4,
+    "replaceColumnIndex": 0,
+    "skipTerms": [
+      "IEMP"
+    ]
+  },
+  "extraRules": {
+    "enabled": true,
+    "file": "extra_rules.txt",
+    "replaceColumnIndex": 0,
+    "lineNumberBase": 1
+  }
 }
