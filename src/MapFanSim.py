@@ -91,6 +91,13 @@ def now_stamp() -> str:
     return _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def format_file_time(ts: float) -> str:
+    try:
+        return _dt.datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)
+
+
 def safe_open_folder(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     if sys.platform.startswith("win"):
@@ -788,10 +795,12 @@ class RemoteClient:
         remote_path = self.cfg.remoteDir.rstrip("/") + "/" + self.cfg.remoteFile
         local_path = farm_runtime_path("download", self.cfg.remoteFile)
         self.log(f"下载：{remote_path} -> {local_path}")
+        remote_stat = sftp.stat(remote_path)
         sftp.get(remote_path, str(local_path))
+        os.utime(local_path, (remote_stat.st_atime, remote_stat.st_mtime))
         sftp.close()
         client.close()
-        self.log(f"下载完成：{local_path}")
+        self.log(f"下载完成：{local_path}，已保留服务器文件时间：{format_file_time(remote_stat.st_mtime)}")
         return local_path
 
     def _builtin_sftp_upload(self, local_file: Path) -> None:
@@ -802,9 +811,11 @@ class RemoteClient:
         remote_path = self.cfg.remoteDir.rstrip("/") + "/" + self.cfg.remoteFile
         self.log(f"上传：{local_file} -> {remote_path}")
         sftp.put(str(local_file), remote_path)
+        st = local_file.stat()
+        sftp.utime(remote_path, (st.st_atime, st.st_mtime))
         sftp.close()
         client.close()
-        self.log("上传完成。")
+        self.log(f"上传完成，服务器文件时间已保留为：{format_file_time(st.st_mtime)}")
 
     def _builtin_sftp_delete_backup(self, backup_name: str) -> None:
         client = self._paramiko_connect()
@@ -828,15 +839,17 @@ class RemoteClient:
         backup_name = re.sub(r"[^0-9A-Za-z_.-]+", "_", backup_stem) + suffix
         backup_path = remote_dir + "/" + backup_name
         self.log(f"服务器备份：{remote_path} -> {backup_path}")
+        remote_stat = sftp.stat(remote_path)
         with sftp.open(remote_path, "rb") as src, sftp.open(backup_path, "wb") as dst:
             while True:
                 chunk = src.read(1024 * 1024)
                 if not chunk:
                     break
                 dst.write(chunk)
+        sftp.utime(backup_path, (remote_stat.st_atime, remote_stat.st_mtime))
         sftp.close()
         client.close()
-        self.log(f"服务器备份完成：{backup_path}")
+        self.log(f"服务器备份完成：{backup_path}，备份文件时间：{format_file_time(remote_stat.st_mtime)}")
         return backup_path
 
     def _find_in_dir(self, base_dir: str, names: List[str]) -> Optional[Path]:
@@ -892,7 +905,7 @@ class RemoteClient:
 
     def _winscp_download(self) -> Path:
         local_path = farm_runtime_path("download", self.cfg.remoteFile)
-        cmds = [f'cd "{self.cfg.remoteDir}"', f'get "{self.cfg.remoteFile}" "{local_path}"']
+        cmds = [f'cd "{self.cfg.remoteDir}"', f'get -preservetime "{self.cfg.remoteFile}" "{local_path}"']
         self._run_winscp_script(cmds)
         return local_path
 
@@ -902,8 +915,8 @@ class RemoteClient:
         local_backup = farm_runtime_path("logs", self.cfg.remoteFile)
         cmds = [
             f'cd "{self.cfg.remoteDir}"',
-            f'get "{self.cfg.remoteFile}" "{local_backup}"',
-            f'put "{local_backup}" "{backup_name}"',
+            f'get -preservetime "{self.cfg.remoteFile}" "{local_backup}"',
+            f'put -preservetime "{local_backup}" "{backup_name}"',
         ]
         self._run_winscp_script(cmds)
         remote_path = self.cfg.remoteDir.rstrip("/") + "/" + backup_name
@@ -914,7 +927,7 @@ class RemoteClient:
         remote_path = self.cfg.remoteDir.rstrip("/") + "/" + self.cfg.remoteFile
         cmds = [
             f'cd "{self.cfg.remoteDir}"',
-            f'put -nopermissions -nopreservetime -resumesupport=off "{local_file}" "{remote_path}"',
+            f'put -nopermissions -preservetime -resumesupport=off "{local_file}" "{remote_path}"',
             f'ls "{self.cfg.remoteFile}"',
         ]
         self._run_winscp_script(cmds)
@@ -2191,16 +2204,19 @@ class App(tk.Tk):
             remote_backup = client.backup_remote(remote_backup_stem(relations))
             downloaded = client.download()
             backup = backup_original_name(downloaded)
+            backup_stat = backup.stat()
             backup_meta = {
                 "remote_file": self.cfg.remoteFile,
                 "remote_dir": self.cfg.remoteDir,
                 "remote_backup_file": remote_backup,
                 "time": now_stamp(),
+                "backup_mtime": backup_stat.st_mtime,
+                "backup_mtime_text": format_file_time(backup_stat.st_mtime),
                 "backup_file": str(backup),
                 "pairs": [asdict(r) for r in relations],
             }
             farm_runtime_path("backup", "last_backup.json").write_text(json.dumps(backup_meta, ensure_ascii=False, indent=2), encoding="utf-8")
-            self.log(f"一键仿真原始备份：{backup}")
+            self.log(f"一键仿真原始备份：{backup}，原文件时间：{format_file_time(backup_stat.st_mtime)}")
             # 远程下载作为本机 MAP；如果目标 MAP 未指定，则同文件内部仿真
             self.cfg.localMapPath = str(downloaded)
             save_config(self.cfg)
@@ -2216,22 +2232,29 @@ class App(tk.Tk):
             marker = farm_runtime_path("backup", "last_backup.json")
             latest: Optional[Path] = None
             remote_backup_file = ""
+            backup_mtime_text = ""
             if marker.exists():
                 try:
                     meta = json.loads(marker.read_text(encoding="utf-8"))
                     backup_path = Path(str(meta.get("backup_file", "")))
                     if backup_path.exists():
                         latest = backup_path
+                    backup_mtime_text = str(meta.get("backup_mtime_text", "")).strip()
                     remote_backup_file = str(meta.get("remote_backup_file", "")).strip()
                 except Exception:
                     latest = None
                     remote_backup_file = ""
+                    backup_mtime_text = ""
             if latest is None:
                 backups = sorted(farm_runtime_dir("backup").glob("*.map"), key=lambda p: p.stat().st_mtime, reverse=True)
                 if not backups:
                     raise RuntimeError("backup 目录没有备份 MAP，无法恢复。")
                 latest = backups[0]
+            latest_mtime = format_file_time(latest.stat().st_mtime)
+            if not backup_mtime_text:
+                backup_mtime_text = latest_mtime
             self.log(f"使用最近备份恢复：{latest}")
+            self.log(f"恢复备份文件时间：{backup_mtime_text}；服务器恢复后应显示该时间，而不是当前上传时间。")
             client = RemoteClient(self.cfg, self.log)
             client.upload(latest)
             if remote_backup_file:
