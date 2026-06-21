@@ -1,0 +1,3 @@
+﻿enabled,local_fan,target_fan,note
+1,F1,F2,sample 1-2
+1,F2,F1,sample 2-1

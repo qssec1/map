@@ -1,0 +1,44 @@
+{
+  "profileVersion": 1,
+  "windFarmName": "西沟二风场",
+  "remoteFile": "slaver104_1.map",
+  "description": "Xigou 2 wind farm IEC104 profile. Use IEC104Table(1).xls / Device_1_5 only. XLS point column maps to MAP column 5 address; MAP key is col3=1 and col4=5; replace MAP column 1 global id.",
+  "deviceMapFormat": {
+    "type": "fan_address_list",
+    "comment": "device_maps.csv is pre-generated from Device_1_5. One row per fan: fan,address1,address2,... EMS701 station rows are excluded.",
+    "sheetNames": [
+      "*"
+    ],
+    "headerRows": 0,
+    "fanColumn": 0,
+    "addressStartColumn": 1,
+    "addressColumn": 1,
+    "excludeTailAddressCount": 0,
+    "skipIfRowContains": [
+      "IEMP"
+    ]
+  },
+  "mapParser": {
+    "comment": "slaver104_1.map: col3=1, col4=5, col5=Device_1_5 point address; replace col1 global id.",
+    "delimiter": ",",
+    "keyColumnIndexes": [
+      2,
+      3
+    ],
+    "keyFixedValues": [
+      "1",
+      "5"
+    ],
+    "addressColumnIndex": 4,
+    "replaceColumnIndex": 0,
+    "skipTerms": [
+      "IEMP"
+    ]
+  },
+  "extraRules": {
+    "enabled": true,
+    "file": "extra_rules.txt",
+    "replaceColumnIndex": 0,
+    "lineNumberBase": 1
+  }
+}
