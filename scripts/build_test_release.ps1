@@ -1,3 +1,7 @@
+param(
+    [string]$Python = "python"
+)
+
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -8,7 +12,9 @@ $zipPath = Join-Path $testRoot "MapFanSim-windows-x64.zip"
 Set-Location $root
 New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
 
-python -m PyInstaller `
+& (Join-Path $PSScriptRoot "build_collector.ps1") -Python $Python
+
+& $Python -m PyInstaller `
     --noconfirm `
     --windowed `
     --name MapFanSim `

@@ -1,7 +1,13 @@
+param(
+    [string]$Python = "python"
+)
+
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+
+& (Join-Path $PSScriptRoot "build_collector.ps1") -Python $Python
 
 $releaseRoot = Join-Path $root "release"
 $releaseDir = Join-Path $releaseRoot "MapFanSim"
@@ -15,7 +21,7 @@ foreach ($path in @("build", "dist", "release", "发布成品", "鍙戝竷鎴愬
     }
 }
 
-python -m PyInstaller `
+& $Python -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `

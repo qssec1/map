@@ -33,6 +33,7 @@ slaverMB_1.map
 .
 ├── src/
 │   └── MapFanSim.py              # 应用入口和核心逻辑
+├── collector/                     # 风机文件拷取工具源码、测试和说明
 ├── data/                         # 默认配置和基础规则数据
 ├── rules/                        # 按风场维护的规则配置
 ├── input_maps/                   # 本地批量处理输入目录
@@ -103,6 +104,8 @@ release\MapFanSim
 ```text
 MapFanSim.exe
 ```
+
+发布脚本会先构建内置的“风机文件拷取工具”，再将其连同说明放入 `tools\风机文件拷取工具`。风机号支持英文/中文逗号和分号；主控与变桨的 IP 前缀、风机号必须分别填写。
 
 现场电脑不需要 PowerShell 5.1；PowerShell 只用于开发者执行 `scripts` 下的构建脚本。
 
