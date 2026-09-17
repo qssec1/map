@@ -45,7 +45,7 @@ APP_TITLE = "MapFanSim 全场风机 MAP 仿真工具"
 APP_VERSION = "V8-HTA-LikeLayout"
 GITHUB_REPOSITORY = "https://github.com/qssec1/map.git"
 GITEE_REPOSITORY = "https://gitee.com/qssec/map"
-PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip"
+PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/releases/download/v2026.09.17/MapFanSim-windows-x64-v2026.09.17.zip"
 WIND_TOOL_NAME = "风机文件拷取工具"
 
 # -----------------------------

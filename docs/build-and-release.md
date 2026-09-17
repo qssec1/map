@@ -48,7 +48,7 @@ Compress-Archive -Path release\MapFanSim\* -DestinationPath artifacts\MapFanSim-
 码云下载地址：
 
 ```text
-https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip
+https://gitee.com/qssec/map/releases/download/v2026.09.17/MapFanSim-windows-x64-v2026.09.17.zip
 ```
 
 发布包包含：
