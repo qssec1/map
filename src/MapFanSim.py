@@ -45,7 +45,8 @@ APP_TITLE = "MapFanSim 全场风机 MAP 仿真工具"
 APP_VERSION = "2026.09.18"
 GITHUB_REPOSITORY = "https://github.com/qssec1/map.git"
 GITEE_REPOSITORY = "https://gitee.com/qssec/map"
-PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/releases/download/v2026.09.18/MapFanSim-windows-x64-v2026.09.18.zip"
+PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip"
+PRODUCT_RELEASES_URL = "https://gitee.com/qssec/map/releases"
 WIND_TOOL_NAME = "风机文件拷取工具"
 
 # -----------------------------
@@ -1629,6 +1630,7 @@ class App(tk.Tk):
         c4 = self.card(right, "项目链接")
         c4.pack(fill=tk.X, pady=(0, 10))
         ttk.Button(c4, text="下载最新版", command=lambda: webbrowser.open(PRODUCT_DOWNLOAD_URL)).pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(c4, text="查看历史版本", command=lambda: webbrowser.open(PRODUCT_RELEASES_URL)).pack(fill=tk.X, pady=4)
         ttk.Button(c4, text="打开码云仓库", command=lambda: webbrowser.open(GITEE_REPOSITORY)).pack(fill=tk.X, pady=4)
         ttk.Button(c4, text="打开 GitHub 仓库", command=lambda: webbrowser.open(GITHUB_REPOSITORY)).pack(fill=tk.X, pady=4)
         ttk.Label(c4, text=f"码云：{GITEE_REPOSITORY}", style="Panel.TLabel", wraplength=310).pack(anchor="w", pady=(8, 0))
@@ -1697,6 +1699,7 @@ class App(tk.Tk):
         link_bar = tk.Frame(p, bg="#0f1720")
         link_bar.pack(fill=tk.X, padx=24, pady=(0, 8))
         ttk.Button(link_bar, text="最新版下载", command=lambda: webbrowser.open(PRODUCT_DOWNLOAD_URL)).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(link_bar, text="历史版本", command=lambda: webbrowser.open(PRODUCT_RELEASES_URL)).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Label(link_bar, text=PRODUCT_DOWNLOAD_URL, style="Sub.TLabel").pack(side=tk.LEFT, padx=12)
         c = self.card(p, "现场使用")
         c.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
@@ -1742,6 +1745,7 @@ class App(tk.Tk):
 - 码云仓库：{GITEE_REPOSITORY}
 - GitHub 仓库：{GITHUB_REPOSITORY}
 - 最新版下载：{PRODUCT_DOWNLOAD_URL}
+- 历史版本：{PRODUCT_RELEASES_URL}
 """)
         txt.config(state="disabled")
 

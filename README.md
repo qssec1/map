@@ -113,7 +113,11 @@ MapFanSim.exe
 
 码云成品包：
 
-[下载 MapFanSim Windows 64 位成品（2026.09.18）](https://gitee.com/qssec/map/releases/download/v2026.09.18/MapFanSim-windows-x64-v2026.09.18.zip)
+[下载 MapFanSim Windows 64 位最新成品](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip)
+
+[下载 2026.09.18 日期版本](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64-v2026.09.18.zip)
+
+[查看按日期保留的历史版本](https://gitee.com/qssec/map/releases)
 
 源码仓库：
 
