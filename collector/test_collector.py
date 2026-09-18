@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import io
+import stat
 import tempfile
 import unittest
 from datetime import date
@@ -11,6 +13,7 @@ from unittest.mock import patch
 from app import WindCollectorApp
 from collector_core import (
     CancelledError,
+    CollectorError,
     InsufficientSpaceError,
     NETWORK_PRESETS,
     VIBRATION_TYPES,
@@ -18,6 +21,7 @@ from collector_core import (
     classify_master_file,
     compact_master_fan_input,
     copy_local_atomic,
+    copy_sftp_atomic,
     iter_dates,
     master_file_selected,
     master_file_matches_day,
@@ -40,6 +44,45 @@ from collector_core import (
     vibration_output_directory,
     vibration_remote_directory,
 )
+
+
+def remote_entry(name: str, mode: int, size: int = 0, modified: int = 1):
+    return SimpleNamespace(
+        filename=name,
+        st_mode=mode,
+        st_size=size,
+        st_mtime=modified,
+    )
+
+
+class TreeSftp:
+    def __init__(
+        self,
+        tree: dict[str, list],
+        errors: set[str] | None = None,
+        files: dict[str, bytes] | None = None,
+    ):
+        self.tree = tree
+        self.errors = errors or set()
+        self.files = files or {}
+        self.attributes = {}
+        for directory, entries in tree.items():
+            for entry in entries:
+                self.attributes[f"{directory.rstrip('/')}/{entry.filename}"] = entry
+
+    def listdir_attr(self, path: str):
+        if path in self.errors:
+            raise OSError("access denied")
+        return list(self.tree[path])
+
+    def stat(self, path: str):
+        return self.attributes[path]
+
+    def open(self, path: str, _mode: str):
+        return io.BytesIO(self.files[path])
+
+    def close(self):
+        pass
 
 
 class ParseTests(unittest.TestCase):
@@ -235,6 +278,177 @@ class OutputTests(unittest.TestCase):
         app.cancel_event = SimpleNamespace(is_set=lambda: False)
         app._emit = lambda *args: None
         return app
+
+    def test_single_day_three_top_level_folders_create_three_tasks(self):
+        directory_mode = stat.S_IFDIR | 0o755
+        file_mode = stat.S_IFREG | 0o644
+        sftp = TreeSftp(
+            {
+                "/day": [
+                    remote_entry("A", directory_mode),
+                    remote_entry("B", directory_mode),
+                    remote_entry("C", directory_mode),
+                ],
+                "/day/A": [remote_entry("a.arc", file_mode, 10)],
+                "/day/B": [remote_entry("nested", directory_mode)],
+                "/day/B/nested": [remote_entry("b.arc", file_mode, 20)],
+                "/day/C": [remote_entry("c.arc", file_mode, 30)],
+            }
+        )
+        app = self._parallel_test_app()
+        plan = app._scan_sftp_tree(sftp, "/day")
+        units = app._build_transfer_units(plan)
+
+        self.assertEqual(len(plan), 3)
+        self.assertEqual(len(units), 3)
+        self.assertEqual(
+            {items[0]["task_group"] for _label, items in units},
+            {"/day/A", "/day/B", "/day/C"},
+        )
+        self.assertEqual(
+            [item["relative_path"] for item in plan],
+            ["A/a.arc", "B/nested/b.arc", "C/c.arc"],
+        )
+
+    def test_sftp_transient_keeps_same_filename_in_different_folders(self):
+        directory_mode = stat.S_IFDIR | 0o755
+        file_mode = stat.S_IFREG | 0o644
+        name = "real_650227003_20260905.arc"
+        tree = {
+            "/day/20260905": [
+                remote_entry("A", directory_mode),
+                remote_entry("B", directory_mode),
+            ],
+            "/day/20260905/A": [remote_entry(name, file_mode, 5, 10)],
+            "/day/20260905/B": [remote_entry(name, file_mode, 6, 10)],
+        }
+        sftp = TreeSftp(
+            tree,
+            files={
+                f"/day/20260905/A/{name}": b"first",
+                f"/day/20260905/B/{name}": b"second",
+            },
+        )
+        client = SimpleNamespace(close=lambda: None)
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            app = object.__new__(WindCollectorApp)
+            app.cancel_event = SimpleNamespace(is_set=lambda: False, wait=lambda _seconds: False)
+            app._emit = lambda *args: None
+            app._open_sftp_session_with_retry = lambda *_args: (client, sftp)
+            app._open_sftp_session = lambda *_args: (client, sftp)
+            app._progress_tracker = lambda total, completed=0: ({}, lambda size: None, lambda: None)
+            summary = app._run_transient(
+                {
+                    "destination": destination,
+                    "days": [date(2026, 9, 5)],
+                    "fans": [3],
+                    "host": "192.168.149.222",
+                    "port": 60022,
+                    "username": "tester",
+                    "password": "",
+                    "template": "/day/{date}",
+                    "layout": "按IP/风机号/日期",
+                    "overwrite": False,
+                    "test_only": False,
+                    "local_root": "",
+                }
+            )
+
+            target = destination / "transient" / "192.168.149.222" / "F003" / "20260905"
+            self.assertEqual((target / "A" / name).read_bytes(), b"first")
+            self.assertEqual((target / "B" / name).read_bytes(), b"second")
+            self.assertIn("拷取 2", summary)
+
+    def test_recursive_scan_fails_instead_of_skipping_unreadable_folder(self):
+        directory_mode = stat.S_IFDIR | 0o755
+        sftp = TreeSftp(
+            {
+                "/day": [remote_entry("blocked", directory_mode)],
+            },
+            errors={"/day/blocked"},
+        )
+        app = self._parallel_test_app()
+        with self.assertRaisesRegex(CollectorError, "任务未完整"):
+            app._scan_sftp_tree(sftp, "/day")
+
+    def test_different_sources_cannot_overwrite_same_target(self):
+        plan = [
+            {
+                "remote_path": "/day/A/same.arc",
+                "relative_path": "A/same.arc",
+                "source_directory": "/day/A",
+                "task_group": "/day/A",
+                "target": Path("D:/out/same.arc"),
+            },
+            {
+                "remote_path": "/day/B/same.arc",
+                "relative_path": "B/same.arc",
+                "source_directory": "/day/B",
+                "task_group": "/day/B",
+                "target": Path("D:/out/same.arc"),
+            },
+        ]
+        with self.assertRaisesRegex(CollectorError, "防覆盖"):
+            WindCollectorApp._build_transfer_units(plan)
+
+    def test_outer_parallel_child_processes_all_directory_units_serially(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = self._parallel_test_app()
+            calls = []
+
+            def copy_items(_options, label, items, _progress, _attempts, **_kwargs):
+                calls.append(label)
+                for item in items:
+                    item["target"].parent.mkdir(parents=True, exist_ok=True)
+                    item["target"].write_bytes(b"x" * item["size"])
+                return len(items), 0, []
+
+            app._copy_sftp_items = copy_items
+            plan = [
+                {
+                    "remote_path": "/day/A/a.arc",
+                    "relative_path": "A/a.arc",
+                    "source_directory": "/day/A",
+                    "task_group": "/day/A",
+                    "target": root / "A" / "a.arc",
+                    "size": 1,
+                },
+                {
+                    "remote_path": "/day/B/b.arc",
+                    "relative_path": "B/b.arc",
+                    "source_directory": "/day/B",
+                    "task_group": "/day/B",
+                    "target": root / "B" / "b.arc",
+                    "size": 1,
+                },
+            ]
+            copied, skipped, failed = app._transfer_sftp_plan(
+                {"_parallel_child": True}, plan, "瞬态", lambda _size: None, lambda: None
+            )
+
+            self.assertEqual(calls, ["目录 /day/A", "目录 /day/B"])
+            self.assertEqual((copied, skipped, failed), (2, 0, 0))
+
+    def test_sftp_copy_rejects_remote_file_changed_during_download(self):
+        class ChangingSftp:
+            def __init__(self):
+                self.stat_calls = 0
+
+            def stat(self, _path):
+                self.stat_calls += 1
+                return SimpleNamespace(st_size=8, st_mtime=self.stat_calls)
+
+            def open(self, _path, _mode):
+                return io.BytesIO(b"12345678")
+
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "changed.arc"
+            with self.assertRaisesRegex(CollectorError, "下载期间发生变化"):
+                copy_sftp_atomic(ChangingSftp(), "/day/changed.arc", destination, False)
+            self.assertFalse(destination.exists())
+            self.assertEqual(destination.with_name("changed.arc.part").stat().st_size, 8)
 
     def test_master_parallel_failure_retries_only_failed_fan_serially(self):
         app = self._parallel_test_app()
@@ -550,6 +764,38 @@ class OutputTests(unittest.TestCase):
             target = out / "transient" / "192.168.149.222" / "F003" / "20260905" / source.name
             self.assertTrue(target.exists())
             self.assertIn("拷取 1", summary)
+
+    def test_transient_network_location_preserves_nested_duplicate_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_root = root / "source" / "20260905"
+            first = source_root / "A" / "real_650227003_20260905.arc"
+            second = source_root / "B" / "real_650227003_20260905.arc"
+            first.parent.mkdir(parents=True)
+            second.parent.mkdir(parents=True)
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            out = root / "out"
+            app = object.__new__(WindCollectorApp)
+            app.cancel_event = SimpleNamespace(is_set=lambda: False, wait=lambda _seconds: False)
+            app._emit = lambda *args: None
+            app._progress_tracker = lambda total, completed=0: ({}, lambda size: None, lambda: None)
+            options = {
+                "destination": out,
+                "days": [date(2026, 9, 5)],
+                "fans": [3],
+                "host": "192.168.149.222",
+                "local_root": str(root / "source" / "{date}"),
+                "layout": "按IP/风机号/日期",
+                "overwrite": False,
+                "test_only": False,
+            }
+
+            summary = app._run_transient_from_local_source(options)
+            target_root = out / "transient" / "192.168.149.222" / "F003" / "20260905"
+            self.assertEqual((target_root / "A" / first.name).read_bytes(), b"first")
+            self.assertEqual((target_root / "B" / second.name).read_bytes(), b"second")
+            self.assertIn("拷取 2", summary)
 
     def test_master_layout_contains_fan_ip_date_and_type(self):
         path = master_output_directory(

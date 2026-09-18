@@ -534,6 +534,9 @@ def copy_sftp_atomic(
                 progress(len(block))
     if temporary.stat().st_size != size:
         raise CollectorError(f"远程文件读取不完整，已保留断点：{remote_path}")
+    completed_stat = sftp.stat(remote_path)
+    if int(completed_stat.st_size) != size or int(completed_stat.st_mtime) != modified:
+        raise CollectorError(f"远程文件在下载期间发生变化，已保留断点：{remote_path}")
     os.replace(temporary, destination)
     metadata_path.unlink(missing_ok=True)
     return CopyResult(remote_path, destination, size, "copied", offset)

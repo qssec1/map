@@ -1507,7 +1507,7 @@ class WindCollectorApp(tk.Tk):
 
         def add(size: int):
             with state_lock:
-                state["done"] += size
+                state["done"] = min(total, state["done"] + size)
                 now = time.monotonic()
                 if now - state["last_emit"] >= 0.25 or state["done"] >= total:
                     state["last_emit"] = now
@@ -1519,6 +1519,386 @@ class WindCollectorApp(tk.Tk):
                 self._emit("progress_bytes", state["done"], total)
 
         return state, add, refresh
+
+    def _scan_sftp_tree(self, sftp, root: str, max_depth: int = 16) -> list[dict]:
+        """Return every regular file below root without silently skipping subdirectories."""
+        normalized_root = root.rstrip("/") or "/"
+        files = []
+        stack = [(normalized_root, "", 0)]
+        while stack:
+            current, relative_directory, depth = stack.pop()
+            if self.cancel_event.is_set():
+                raise CancelledError()
+            try:
+                entries = sorted(sftp.listdir_attr(current), key=lambda item: item.filename)
+            except OSError as exc:
+                raise CollectorError(f"无法读取远程目录，任务未完整：{current}（{exc}）") from exc
+            for entry in entries:
+                name = entry.filename
+                if name in {".", ".."} or "/" in name or "\\" in name:
+                    raise CollectorError(f"远程目录包含不安全的名称：{current}/{name}")
+                remote_path = posixpath.join(current.rstrip("/"), name)
+                relative_path = (
+                    posixpath.join(relative_directory, name) if relative_directory else name
+                )
+                if stat.S_ISDIR(entry.st_mode):
+                    if depth >= max_depth:
+                        raise CollectorError(f"远程目录层级超过 {max_depth} 层：{remote_path}")
+                    stack.append((remote_path, relative_path, depth + 1))
+                elif stat.S_ISREG(entry.st_mode):
+                    first_segment, separator, _remainder = relative_path.partition("/")
+                    task_group = (
+                        posixpath.join(normalized_root, first_segment)
+                        if separator
+                        else normalized_root
+                    )
+                    files.append(
+                        {
+                            "remote_path": remote_path,
+                            "relative_path": relative_path,
+                            "source_directory": posixpath.dirname(remote_path),
+                            "task_group": task_group,
+                            "name": name,
+                            "size": int(entry.st_size),
+                            "modified": int(entry.st_mtime),
+                        }
+                    )
+        return sorted(files, key=lambda item: item["remote_path"])
+
+    @staticmethod
+    def _build_transfer_units(plan: list[dict]) -> list[tuple[str, list[dict]]]:
+        groups = {}
+        targets = {}
+        for item in plan:
+            if item.get("target") is not None:
+                target_key = os.path.normcase(os.path.abspath(str(item["target"])))
+                previous = targets.setdefault(target_key, item["remote_path"])
+                if previous != item["remote_path"]:
+                    raise CollectorError(
+                        "多个源文件会写入同一个目标路径，已停止以防覆盖："
+                        f"{previous}；{item['remote_path']} -> {item['target']}"
+                    )
+            group = str(item.get("task_group", item["source_directory"]))
+            groups.setdefault(group, []).append(item)
+        if len(groups) == 1 and len(plan) > 1:
+            return [
+                (f"文件 {item['relative_path']}", [item])
+                for item in sorted(plan, key=lambda value: value["remote_path"])
+            ]
+        return [
+            (f"目录 {directory}", sorted(items, key=lambda value: value["remote_path"]))
+            for directory, items in sorted(groups.items())
+        ]
+
+    @staticmethod
+    def _close_sftp(client, sftp) -> None:
+        try:
+            if sftp:
+                sftp.close()
+        finally:
+            if client:
+                client.close()
+
+    def _copy_sftp_items(
+        self,
+        options: dict,
+        label: str,
+        items: list[dict],
+        add_progress,
+        max_attempts: int,
+        reset_partial_first: bool = True,
+    ) -> tuple[int, int, list[dict]]:
+        copied = skipped = 0
+        failed_items = []
+        client = sftp = None
+        try:
+            for item in items:
+                if self.cancel_event.is_set():
+                    raise CancelledError()
+                result = None
+                last_error = None
+                for attempt in range(1, max_attempts + 1):
+                    if self.cancel_event.is_set():
+                        raise CancelledError()
+                    try:
+                        if sftp is None:
+                            client, sftp = self._open_sftp_session(options)
+                        self._emit("status", item["status"])
+                        result = copy_sftp_atomic(
+                            sftp,
+                            item["remote_path"],
+                            item["target"],
+                            options.get("overwrite", False) or item.get("force_overwrite", False),
+                            self.cancel_event.is_set,
+                            add_progress,
+                            reset_partial=reset_partial_first and attempt == 1,
+                        )
+                        break
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        last_error = exc
+                        self._close_sftp(client, sftp)
+                        client = sftp = None
+                        if attempt < max_attempts:
+                            self._emit(
+                                "log",
+                                f"{label}传输中断，第 {attempt + 1} 次将断点续传："
+                                f"{item['remote_path']}（{exc}）",
+                            )
+                            if self.cancel_event.wait(2):
+                                raise CancelledError()
+                if result is None:
+                    failed_item = dict(item)
+                    failed_item["last_error"] = str(last_error)
+                    failed_items.append(failed_item)
+                    continue
+                if result.status == "copied":
+                    copied += 1
+                    self._emit("log", f"已拷取{item['kind']}：{item['relative_path']}（{human_size(result.size)}）")
+                    if result.resumed_from:
+                        self._emit(
+                            "log",
+                            f"断点续传：{item['relative_path']}，从 {human_size(result.resumed_from)} 接续",
+                        )
+                else:
+                    skipped += 1
+                    self._emit("log", f"已跳过：{item['target']}")
+        finally:
+            self._close_sftp(client, sftp)
+        return copied, skipped, failed_items
+
+    def _transfer_sftp_plan(
+        self,
+        options: dict,
+        plan: list[dict],
+        label: str,
+        add_progress,
+        refresh_progress,
+    ) -> tuple[int, int, int]:
+        if not plan:
+            return 0, 0, 0
+        units = self._build_transfer_units(plan)
+        workers = 1 if options.get("_parallel_child") else min(SFTP_AUTO_WORKERS, len(units))
+        copied = skipped = 0
+        retry_units = []
+        if workers > 1:
+            mode = "文件夹" if len({item["task_group"] for item in plan}) > 1 else "文件"
+            self._emit(
+                "log",
+                f"{label}单台任务拆分为 {len(units)} 个{mode}任务，使用 {workers} 条独立 SFTP 连接。",
+            )
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._copy_sftp_items,
+                        options,
+                        unit_label,
+                        items,
+                        add_progress,
+                        1,
+                    ): (unit_label, items)
+                    for unit_label, items in units
+                }
+                for future in as_completed(futures):
+                    if self.cancel_event.is_set():
+                        raise CancelledError()
+                    unit_label, _items = futures[future]
+                    unit_copied = unit_skipped = 0
+                    try:
+                        unit_copied, unit_skipped, failed_items = future.result()
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        failed_items = []
+                        for item in _items:
+                            failed_item = dict(item)
+                            failed_item["last_error"] = str(exc)
+                            failed_items.append(failed_item)
+                    copied += unit_copied
+                    skipped += unit_skipped
+                    if failed_items:
+                        retry_units.append((unit_label, failed_items))
+                        self._emit("log", f"{unit_label}并发失败，加入单连接断点重试。")
+                    refresh_progress()
+        else:
+            final_failures = []
+            for unit_label, items in units:
+                unit_copied, unit_skipped, failed_items = self._copy_sftp_items(
+                    options, unit_label, items, add_progress, 3
+                )
+                copied += unit_copied
+                skipped += unit_skipped
+                final_failures.extend(failed_items)
+                refresh_progress()
+
+        if workers > 1:
+            final_failures = []
+        for unit_label, items in retry_units:
+            self._emit("log", f"{unit_label}降级为单连接重试，已完成文件不会重复下载。")
+            unit_copied, unit_skipped, failed_items = self._copy_sftp_items(
+                options,
+                unit_label,
+                items,
+                add_progress,
+                3,
+                reset_partial_first=False,
+            )
+            copied += unit_copied
+            skipped += unit_skipped
+            final_failures.extend(failed_items)
+            refresh_progress()
+
+        failed_keys = {item["remote_path"] for item in final_failures}
+        for item in plan:
+            target = item["target"]
+            if not target.is_file() or target.stat().st_size != item["size"]:
+                failed_keys.add(item["remote_path"])
+        if failed_keys:
+            self._emit("log", f"{label}完整性校验未通过：{len(failed_keys)} 个文件未完整。")
+            for item in final_failures:
+                self._emit(
+                    "log",
+                    f"文件失败：{item['remote_path']}（{item.get('last_error', '目标文件不完整')}）",
+                )
+        else:
+            self._emit("log", f"{label}完整性校验通过：{len(plan)} 个文件的路径和大小均正确。")
+        return copied, skipped, len(failed_keys)
+
+    def _copy_local_items(
+        self,
+        options: dict,
+        label: str,
+        items: list[dict],
+        add_progress,
+        max_attempts: int,
+        reset_partial_first: bool = True,
+    ) -> tuple[int, int, list[dict]]:
+        copied = skipped = 0
+        failed_items = []
+        for item in items:
+            result = None
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                if self.cancel_event.is_set():
+                    raise CancelledError()
+                try:
+                    self._emit("status", item["status"])
+                    result = copy_local_atomic(
+                        item["source"],
+                        item["target"],
+                        options.get("overwrite", False),
+                        self.cancel_event.is_set,
+                        add_progress,
+                        reset_partial=reset_partial_first and attempt == 1,
+                    )
+                    break
+                except CancelledError:
+                    raise
+                except Exception as exc:
+                    last_error = exc
+                    if attempt < max_attempts:
+                        self._emit(
+                            "log",
+                            f"{label}读取中断，第 {attempt + 1} 次将断点续传："
+                            f"{item['source']}（{exc}）",
+                        )
+                        if self.cancel_event.wait(2):
+                            raise CancelledError()
+            if result is None:
+                failed_item = dict(item)
+                failed_item["last_error"] = str(last_error)
+                failed_items.append(failed_item)
+            elif result.status == "copied":
+                copied += 1
+                self._emit("log", f"已拷取{item['kind']}：{item['relative_path']}（{human_size(result.size)}）")
+            else:
+                skipped += 1
+                self._emit("log", f"已跳过：{item['target']}")
+        return copied, skipped, failed_items
+
+    def _transfer_local_plan(
+        self,
+        options: dict,
+        plan: list[dict],
+        label: str,
+        add_progress,
+        refresh_progress,
+    ) -> tuple[int, int, int]:
+        if not plan:
+            return 0, 0, 0
+        units = self._build_transfer_units(plan)
+        workers = min(SFTP_AUTO_WORKERS, len(units))
+        copied = skipped = 0
+        retry_units = []
+        final_failures = []
+        if workers > 1:
+            mode = "文件夹" if len({item["task_group"] for item in plan}) > 1 else "文件"
+            self._emit(
+                "log",
+                f"{label}拆分为 {len(units)} 个{mode}任务，使用 {workers} 个并发读取任务。",
+            )
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        self._copy_local_items,
+                        options,
+                        unit_label,
+                        items,
+                        add_progress,
+                        1,
+                    ): (unit_label, items)
+                    for unit_label, items in units
+                }
+                for future in as_completed(futures):
+                    unit_label, items = futures[future]
+                    unit_copied = unit_skipped = 0
+                    try:
+                        unit_copied, unit_skipped, failed_items = future.result()
+                    except CancelledError:
+                        raise
+                    except Exception as exc:
+                        failed_items = []
+                        for item in items:
+                            failed_item = dict(item)
+                            failed_item["last_error"] = str(exc)
+                            failed_items.append(failed_item)
+                    copied += unit_copied
+                    skipped += unit_skipped
+                    if failed_items:
+                        retry_units.append((unit_label, failed_items))
+                    refresh_progress()
+        else:
+            unit_label, items = units[0]
+            copied, skipped, final_failures = self._copy_local_items(
+                options, unit_label, items, add_progress, 3
+            )
+
+        for unit_label, items in retry_units:
+            self._emit("log", f"{unit_label}降级为顺序重试，已完成文件不会重复拷取。")
+            unit_copied, unit_skipped, failed_items = self._copy_local_items(
+                options,
+                unit_label,
+                items,
+                add_progress,
+                3,
+                reset_partial_first=False,
+            )
+            copied += unit_copied
+            skipped += unit_skipped
+            final_failures.extend(failed_items)
+            refresh_progress()
+
+        failed_keys = {item["remote_path"] for item in final_failures}
+        for item in plan:
+            target = item["target"]
+            if not target.is_file() or target.stat().st_size != item["size"]:
+                failed_keys.add(item["remote_path"])
+        if failed_keys:
+            self._emit("log", f"{label}完整性校验未通过：{len(failed_keys)} 个文件未完整。")
+        else:
+            self._emit("log", f"{label}完整性校验通过：{len(plan)} 个文件的路径和大小均正确。")
+        return copied, skipped, len(failed_keys)
 
     def _render_local_source_root(self, template: str, day: date, **values) -> Path:
         if not template.strip():
@@ -1591,20 +1971,41 @@ class WindCollectorApp(tk.Tk):
                     else:
                         fan = fixed_fan
                     found.add((day.strftime("%Y%m%d"), fan))
-                    relative_dir = str(source.parent.relative_to(root)).replace("\\", "/") if source.parent != root else str(root)
-                    target = transient_output_directory(
-                        options["destination"], options["host"], relative_dir, day, fan, options["layout"]
-                    ) / source.name
+                    relative_path = source.relative_to(root)
+                    target_root = transient_output_directory(
+                        options["destination"], options["host"], str(root), day, fan, options["layout"]
+                    )
                     stat_info = source.stat()
-                    plan.append((day, fan, source, target, stat_info.st_size, stat_info.st_mtime_ns))
-        total_size = sum(item[4] for item in plan)
+                    first_segment = relative_path.parts[0]
+                    task_group = root / first_segment if len(relative_path.parts) > 1 else root
+                    plan.append(
+                        {
+                            "source": source,
+                            "remote_path": str(source.resolve()),
+                            "relative_path": relative_path.as_posix(),
+                            "source_directory": str(source.parent),
+                            "task_group": str(task_group),
+                            "target": target_root / relative_path,
+                            "size": stat_info.st_size,
+                            "modified": stat_info.st_mtime_ns,
+                            "kind": "瞬态网络位置文件",
+                            "status": (
+                                f"瞬态网络位置 {fan:03d}号 {day:%Y-%m-%d}："
+                                f"{relative_path.as_posix()}"
+                            ),
+                        }
+                    )
+        total_size = sum(item["size"] for item in plan)
         initial_done = 0
         if not options["overwrite"]:
-            for _day, _fan, source, target, size, modified in plan:
-                if target.exists() and target.stat().st_size == size:
-                    initial_done += size
+            for item in plan:
+                target = item["target"]
+                if target.exists() and target.stat().st_size == item["size"]:
+                    initial_done += item["size"]
                 else:
-                    initial_done += partial_resume_offset(target, str(source.resolve()), size, modified)
+                    initial_done += partial_resume_offset(
+                        target, item["remote_path"], item["size"], item["modified"]
+                    )
         remaining = max(0, total_size - initial_done)
         free = require_transfer_space(options["destination"], remaining)
         self._emit(
@@ -1615,25 +2016,10 @@ class WindCollectorApp(tk.Tk):
         _state, add_progress, refresh_progress = self._progress_tracker(total_size, initial_done)
         if options["test_only"]:
             return f"瞬态网络位置测试通过：命中文件 {len(plan)} 个"
-        for day, fan, source, target, _size, _modified in plan:
-            if self.cancel_event.is_set():
-                raise CancelledError()
-            self._emit("status", f"瞬态网络位置 {fan:03d}号 {day:%Y-%m-%d}：{source.name}")
-            try:
-                result = copy_local_atomic(source, target, options["overwrite"], self.cancel_event.is_set, add_progress)
-                if result.status == "copied":
-                    copied += 1
-                    self._emit("log", f"已拷取瞬态网络位置文件：{source} -> {target}")
-                else:
-                    skipped += 1
-                    self._emit("log", f"已跳过瞬态网络位置文件：{target}")
-            except CancelledError:
-                raise
-            except Exception as exc:
-                failed += 1
-                self._emit("log", f"瞬态网络位置文件失败：{source}（{exc}）")
-            refresh_progress()
-            self._emit("counter", copied, skipped, failed)
+        copied, skipped, failed = self._transfer_local_plan(
+            options, plan, "瞬态网络位置", add_progress, refresh_progress
+        )
+        self._emit("counter", copied, skipped, failed)
         for day in options["days"]:
             for fan in options["fans"]:
                 key = (day.strftime("%Y%m%d"), fan)
@@ -1729,44 +2115,58 @@ class WindCollectorApp(tk.Tk):
                     raise CancelledError()
                 remote_dir = render_remote_directory(options["template"], day)
                 self._emit("log", f"检查瞬态远程目录：{remote_dir}")
-                try:
-                    entries = sftp.listdir_attr(remote_dir)
-                except OSError as exc:
-                    self._emit("log", f"目录不可访问：{remote_dir}（{exc}）")
-                    continue
-                self._emit("log", f"瞬态目录可访问：{remote_dir}，目录项={len(entries)}")
+                entries = self._scan_sftp_tree(sftp, remote_dir)
+                folder_count = len({item["task_group"] for item in entries})
+                self._emit(
+                    "log",
+                    f"瞬态目录递归扫描完成：{remote_dir}，文件={len(entries)}，"
+                    f"第一层任务={folder_count}",
+                )
 
-                for entry in entries:
-                    info = transient_file_info(entry.filename, day.strftime("%Y%m%d"))
-                    if not info or not stat.S_ISREG(entry.st_mode):
+                for source in entries:
+                    info = transient_file_info(source["name"], day.strftime("%Y%m%d"))
+                    if not info:
                         continue
                     _equipment_id, fan = info
                     if fan not in selected_fans:
                         continue
                     found.add((day.strftime("%Y%m%d"), fan))
-                    remote_path = posixpath.join(remote_dir, entry.filename)
-                    target = (
-                        transient_output_directory(
-                            options["destination"],
-                            options["host"],
-                            remote_dir,
-                            day,
-                            fan,
-                            options["layout"],
-                        )
-                        / entry.filename
+                    target_root = transient_output_directory(
+                        options["destination"],
+                        options["host"],
+                        remote_dir,
+                        day,
+                        fan,
+                        options["layout"],
                     )
-                    plan.append((day, fan, entry, remote_path, target))
+                    item = dict(source)
+                    item.update(
+                        {
+                            "target": target_root.joinpath(*source["relative_path"].split("/")),
+                            "day": day,
+                            "fan": fan,
+                            "kind": "瞬态",
+                            "status": (
+                                f"瞬态 {fan:03d}号 {day:%Y-%m-%d}："
+                                f"{source['relative_path']}"
+                            ),
+                        }
+                    )
+                    plan.append(item)
 
             initial_done = 0
-            total_size = sum(int(item[2].st_size) for item in plan)
+            total_size = sum(item["size"] for item in plan)
             if not options["overwrite"]:
-                for _day, _fan, entry, remote_path, target in plan:
-                    if target.exists() and target.stat().st_size == int(entry.st_size):
-                        initial_done += int(entry.st_size)
+                for item in plan:
+                    target = item["target"]
+                    if target.exists() and target.stat().st_size == item["size"]:
+                        initial_done += item["size"]
                     else:
                         initial_done += partial_resume_offset(
-                            target, remote_path, int(entry.st_size), int(entry.st_mtime)
+                            target,
+                            item["remote_path"],
+                            item["size"],
+                            item["modified"],
                         )
             remaining = max(0, total_size - initial_done)
             free = require_transfer_space(options["destination"], remaining)
@@ -1782,66 +2182,12 @@ class WindCollectorApp(tk.Tk):
                 _progress_state, add_progress, refresh_progress = self._progress_tracker(
                     total_size, initial_done
                 )
-
-            for day, fan, entry, remote_path, target in plan:
-                if self.cancel_event.is_set():
-                    raise CancelledError()
-                self._emit("status", f"瞬态 {fan:03d}号 {day:%Y-%m-%d}：{entry.filename}")
-                result = None
-                last_error = None
-                for attempt in range(1, 4):
-                    if attempt > 1:
-                        try:
-                            sftp.close()
-                        except Exception:
-                            pass
-                        client.close()
-                        self._emit("log", f"2 秒后进行第 {attempt} 次连接并续传：{entry.filename}")
-                        if self.cancel_event.wait(2):
-                            raise CancelledError()
-                        try:
-                            client, sftp = self._open_sftp_session(options)
-                        except Exception as exc:
-                            last_error = exc
-                            self._emit("log", f"第 {attempt} 次连接失败：{exc}")
-                            continue
-                    try:
-                        result = copy_sftp_atomic(
-                            sftp,
-                            remote_path,
-                            target,
-                            options["overwrite"],
-                            self.cancel_event.is_set,
-                            add_progress,
-                            reset_partial=(attempt == 1),
-                        )
-                        last_error = None
-                        break
-                    except CancelledError:
-                        raise
-                    except Exception as exc:
-                        last_error = exc
-                        self._emit("log", f"第 {attempt} 次传输中断：{entry.filename}（{exc}）")
-
-                if result is None:
-                    failed += 1
-                    self._emit("log", f"文件失败：{remote_path}（3 次尝试后仍失败：{last_error}）")
-                    refresh_progress()
-                    self._emit("counter", copied, skipped, failed)
-                    continue
-                if result.status == "copied":
-                    copied += 1
-                    self._emit("log", f"已拷取：{entry.filename}（{human_size(result.size)}）")
-                    if result.resumed_from:
-                        self._emit(
-                            "log",
-                            f"断点续传：{entry.filename}，从 {human_size(result.resumed_from)} 接续",
-                        )
-                else:
-                    skipped += 1
-                    self._emit("log", f"已跳过：{target}")
-                refresh_progress()
-                self._emit("counter", copied, skipped, failed)
+            self._close_sftp(client, sftp)
+            client = sftp = None
+            copied, skipped, failed = self._transfer_sftp_plan(
+                options, plan, "瞬态", add_progress, refresh_progress
+            )
+            self._emit("counter", copied, skipped, failed)
 
             for day in options["days"]:
                 for fan in options["fans"]:
@@ -1852,7 +2198,7 @@ class WindCollectorApp(tk.Tk):
                 return copied, skipped, failed, total_size
             return f"瞬态完成：拷取 {copied}，跳过 {skipped}，失败 {failed}，共 {human_size(total_size)}"
         finally:
-            client.close()
+            self._close_sftp(client, sftp)
 
     def _run_pitch(self, options: dict) -> str:
         if not options.get("test_only") and not options.get("_parallel_child") and len(options["fans"]) > 1:
@@ -2156,41 +2502,50 @@ class WindCollectorApp(tk.Tk):
                             options["remote_base"], data_type, options["site"], day, fan
                         )
                         self._emit("log", f"检查震动远程目录：{remote_dir}")
-                        try:
-                            entries = sftp.listdir_attr(remote_dir)
-                        except OSError as exc:
-                            self._emit("log", f"震动目录不可访问：{remote_dir}（{exc}）")
-                            continue
+                        entries = self._scan_sftp_tree(sftp, remote_dir)
+                        folder_count = len({item["task_group"] for item in entries})
                         self._emit(
                             "log",
-                            f"震动目录可访问：{remote_dir}，目录项={len(entries)}",
+                            f"震动目录递归扫描完成：{remote_dir}，文件={len(entries)}，"
+                            f"第一层任务={folder_count}",
                         )
-                        for entry in entries:
-                            if not stat.S_ISREG(entry.st_mode):
-                                continue
-                            remote_path = posixpath.join(remote_dir, entry.filename)
-                            target = (
-                                vibration_output_directory(
-                                    options["destination"],
-                                    options["host"],
-                                    options["site"],
-                                    data_type,
-                                    day,
-                                    fan,
-                                )
-                                / entry.filename
+                        target_root = vibration_output_directory(
+                            options["destination"],
+                            options["host"],
+                            options["site"],
+                            data_type,
+                            day,
+                            fan,
+                        )
+                        for source in entries:
+                            item = dict(source)
+                            item.update(
+                                {
+                                    "target": target_root.joinpath(
+                                        *source["relative_path"].split("/")
+                                    ),
+                                    "kind": f"震动 {data_type}",
+                                    "status": (
+                                        f"震动 {data_type} {options['site']}{fan:03d} "
+                                        f"{day:%Y-%m-%d}：{source['relative_path']}"
+                                    ),
+                                }
                             )
-                            plan.append((data_type, day, entry, remote_path, target))
+                            plan.append(item)
 
-                fan_total = sum(int(item[2].st_size) for item in plan)
+                fan_total = sum(item["size"] for item in plan)
                 fan_initial = 0
                 if not options["overwrite"]:
-                    for _type, _day, entry, remote_path, target in plan:
-                        if target.exists() and target.stat().st_size == int(entry.st_size):
-                            fan_initial += int(entry.st_size)
+                    for item in plan:
+                        target = item["target"]
+                        if target.exists() and target.stat().st_size == item["size"]:
+                            fan_initial += item["size"]
                         else:
                             fan_initial += partial_resume_offset(
-                                target, remote_path, int(entry.st_size), int(entry.st_mtime)
+                                target,
+                                item["remote_path"],
+                                item["size"],
+                                item["modified"],
                             )
                 fan_remaining = max(0, fan_total - fan_initial)
                 free = require_transfer_space(options["destination"], fan_remaining)
@@ -2204,36 +2559,20 @@ class WindCollectorApp(tk.Tk):
                     refresh_progress = lambda: None
                 else:
                     _state, add_progress, refresh_progress = self._progress_tracker(fan_total, fan_initial)
-                for data_type, day, entry, remote_path, target in plan:
-                    if self.cancel_event.is_set():
-                        raise CancelledError()
-                    self._emit(
-                        "status",
-                        f"震动 {data_type} {options['site']}{fan:03d} {day:%Y-%m-%d}：{entry.filename}",
-                    )
-                    try:
-                        result = copy_sftp_atomic(
-                            sftp,
-                            remote_path,
-                            target,
-                            options["overwrite"],
-                            self.cancel_event.is_set,
-                            add_progress,
-                        )
-                        if result.status == "copied":
-                            copied += 1
-                            total_size += result.size
-                            self._emit("log", f"已拷取震动 {data_type}：{entry.filename}（{human_size(result.size)}）")
-                        else:
-                            skipped += 1
-                            self._emit("log", f"已跳过震动：{target}")
-                    except CancelledError:
-                        raise
-                    except Exception as exc:
-                        failed += 1
-                        self._emit("log", f"震动文件失败：{remote_path}（{exc}）")
-                    refresh_progress()
-                    self._emit("counter", copied, skipped, failed + offline)
+                self._close_sftp(client, sftp)
+                client = sftp = None
+                fan_copied, fan_skipped, fan_failed = self._transfer_sftp_plan(
+                    options,
+                    plan,
+                    f"震动 {options['site']}{fan:03d}",
+                    add_progress,
+                    refresh_progress,
+                )
+                copied += fan_copied
+                skipped += fan_skipped
+                failed += fan_failed
+                total_size += fan_total
+                self._emit("counter", copied, skipped, failed + offline)
             except CancelledError:
                 raise
             except Exception as exc:
@@ -2241,12 +2580,7 @@ class WindCollectorApp(tk.Tk):
                 self._emit("log", f"震动风机 {options['site']}{fan:03d} 失败：{exc}")
                 self._emit("counter", copied, skipped, failed + offline)
             finally:
-                try:
-                    if sftp:
-                        sftp.close()
-                finally:
-                    if client:
-                        client.close()
+                self._close_sftp(client, sftp)
         if options.get("_return_counts"):
             return copied, skipped, failed, offline, total_size
         return f"震动完成：拷取 {copied}，跳过 {skipped}，失败 {failed}，连接失败 {offline}，共 {human_size(total_size)}"
@@ -2297,19 +2631,43 @@ class WindCollectorApp(tk.Tk):
                     for source in source_dir.rglob("*"):
                         if not source.is_file():
                             continue
-                        target = vibration_output_directory(
+                        relative_path = source.relative_to(source_dir)
+                        target_root = vibration_output_directory(
                             options["destination"], options["host"], options["site"], data_type, day, fan
-                        ) / source.relative_to(source_dir)
+                        )
                         stat_info = source.stat()
-                        plan.append((data_type, day, fan, source, target, stat_info.st_size, stat_info.st_mtime_ns))
-        total_size = sum(item[5] for item in plan)
+                        first_segment = relative_path.parts[0]
+                        task_group = (
+                            source_dir / first_segment if len(relative_path.parts) > 1 else source_dir
+                        )
+                        plan.append(
+                            {
+                                "source": source,
+                                "remote_path": str(source.resolve()),
+                                "relative_path": relative_path.as_posix(),
+                                "source_directory": str(source.parent),
+                                "task_group": str(task_group),
+                                "target": target_root / relative_path,
+                                "size": stat_info.st_size,
+                                "modified": stat_info.st_mtime_ns,
+                                "kind": f"震动网络位置 {data_type}",
+                                "status": (
+                                    f"震动网络位置 {data_type} {fan:03d}号 "
+                                    f"{day:%Y-%m-%d}：{relative_path.as_posix()}"
+                                ),
+                            }
+                        )
+        total_size = sum(item["size"] for item in plan)
         initial_done = 0
         if not options["overwrite"]:
-            for _type, _day, _fan, source, target, size, modified in plan:
-                if target.exists() and target.stat().st_size == size:
-                    initial_done += size
+            for item in plan:
+                target = item["target"]
+                if target.exists() and target.stat().st_size == item["size"]:
+                    initial_done += item["size"]
                 else:
-                    initial_done += partial_resume_offset(target, str(source.resolve()), size, modified)
+                    initial_done += partial_resume_offset(
+                        target, item["remote_path"], item["size"], item["modified"]
+                    )
         remaining = max(0, total_size - initial_done)
         free = require_transfer_space(options["destination"], remaining)
         self._emit(
@@ -2320,25 +2678,10 @@ class WindCollectorApp(tk.Tk):
         _state, add_progress, refresh_progress = self._progress_tracker(total_size, initial_done)
         if options["test_only"]:
             return f"震动网络位置测试通过：命中文件 {len(plan)} 个"
-        for data_type, day, fan, source, target, _size, _modified in plan:
-            if self.cancel_event.is_set():
-                raise CancelledError()
-            self._emit("status", f"震动网络位置 {data_type} {fan:03d}号 {day:%Y-%m-%d}：{source.name}")
-            try:
-                result = copy_local_atomic(source, target, options["overwrite"], self.cancel_event.is_set, add_progress)
-                if result.status == "copied":
-                    copied += 1
-                    self._emit("log", f"已拷取震动网络位置文件：{source} -> {target}")
-                else:
-                    skipped += 1
-                    self._emit("log", f"已跳过震动网络位置文件：{target}")
-            except CancelledError:
-                raise
-            except Exception as exc:
-                failed += 1
-                self._emit("log", f"震动网络位置文件失败：{source}（{exc}）")
-            refresh_progress()
-            self._emit("counter", copied, skipped, failed)
+        copied, skipped, failed = self._transfer_local_plan(
+            options, plan, "震动网络位置", add_progress, refresh_progress
+        )
+        self._emit("counter", copied, skipped, failed)
         return f"震动网络位置完成：拷取 {copied}，跳过 {skipped}，失败 {failed}，共 {human_size(total_size)}"
 
     @staticmethod
