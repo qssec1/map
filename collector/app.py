@@ -2802,24 +2802,27 @@ class WindCollectorApp(tk.Tk):
         files = []
         stack = [(directory.rstrip("/") or "/", "")]
         while stack:
+            if self.cancel_event.is_set():
+                raise CancelledError()
             current, relative = stack.pop()
             try:
                 names = self._ftp_list_names(ftp, current)
             except ftplib.all_errors as exc:
-                self._emit("log", f"FTP 目录无法列出：{current}（{exc}）")
-                continue
+                raise CollectorError(f"FTP 目录无法列出，任务未完整：{current}（{exc}）") from exc
             for name in names:
                 remote_path = self._ftp_join(current, name)
                 rel_path = posixpath.join(relative, name) if relative else name
                 if self._ftp_is_dir(ftp, remote_path):
                     if rel_path.count("/") < max_depth:
                         stack.append((remote_path, rel_path))
+                    else:
+                        raise CollectorError(f"FTP 目录层级超过 {max_depth} 层：{remote_path}")
                     continue
                 if not master_file_selected(name, options["selected_types"], options["keywords"], True):
                     continue
                 size = self._ftp_file_size(ftp, remote_path)
                 if size is None:
-                    continue
+                    raise CollectorError(f"无法读取 FTP 文件大小，任务未完整：{remote_path}")
                 files.append((remote_path, rel_path, size))
         return files
 

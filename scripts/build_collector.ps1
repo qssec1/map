@@ -18,6 +18,7 @@ try {
         --name WindFileCollector `
         --collect-all paramiko `
         app.py
+    if ($LASTEXITCODE -ne 0) { throw "Collector build failed" }
 } finally {
     Pop-Location
 }

@@ -36,13 +36,14 @@ python src\MapFanSim.py
 输出：
 
 ```text
-release\MapFanSim
+release\MapFanSim_构建时间
 ```
 
-生成压缩包：
+也可指定一个尚不存在的输出目录，再压缩该目录：
 
 ```powershell
-Compress-Archive -Path release\MapFanSim\* -DestinationPath artifacts\MapFanSim-windows-x64.zip -Force
+.\scripts\build_release.ps1 -OutputDirectory release\MapFanSim_2026.09.18.1
+Compress-Archive -Path release\MapFanSim_2026.09.18.1\* -DestinationPath artifacts\MapFanSim-windows-x64-v2026.09.18.1.zip
 ```
 
 码云下载地址：

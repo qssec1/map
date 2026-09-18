@@ -87,7 +87,7 @@ python src\MapFanSim.py
 
 ## 打包发布
 
-生成目录版发布包：
+生成独立目录版发布包（保留旧成品和运行环境）：
 
 ```powershell
 .\scripts\build_release.ps1
@@ -96,10 +96,10 @@ python src\MapFanSim.py
 输出目录：
 
 ```text
-release\MapFanSim
+release\MapFanSim_构建时间
 ```
 
-现场电脑只需要复制整个 `release\MapFanSim` 文件夹并运行：
+现场电脑只需要复制整个成品文件夹并运行：
 
 ```text
 MapFanSim.exe
@@ -114,6 +114,8 @@ MapFanSim.exe
 码云成品包：
 
 [下载 MapFanSim Windows 64 位最新成品](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip)
+
+[下载 2026.09.18.1 日期版本](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64-v2026.09.18.1.zip)
 
 [下载 2026.09.18 日期版本](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64-v2026.09.18.zip)
 
@@ -151,3 +153,4 @@ data/config.json
 - [构建与发布](docs/build-and-release.md)
 - [规则配置说明](docs/rules.md)
 - [维护规范](docs/maintenance.md)
+- [2026.09.18.1 检查记录](docs/acceptance-2026.09.18.1.md)

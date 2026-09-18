@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import json
+import ipaddress
 import os
 import re
 import shutil
@@ -42,7 +43,7 @@ from tkinter import ttk, filedialog, messagebox
 
 APP_NAME = "MapFanSim"
 APP_TITLE = "MapFanSim 全场风机 MAP 仿真工具"
-APP_VERSION = "2026.09.18"
+APP_VERSION = "2026.09.18.1"
 GITHUB_REPOSITORY = "https://github.com/qssec1/map.git"
 GITEE_REPOSITORY = "https://gitee.com/qssec/map"
 PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip"
@@ -675,6 +676,13 @@ def run_local_simulation(
 
 class RemoteClient:
     def __init__(self, cfg: Config, log_func):
+        try:
+            address = ipaddress.IPv4Address(cfg.host.strip())
+        except ValueError as exc:
+            raise RuntimeError("服务器地址必须填写内网 IPv4，不使用域名或公网地址。") from exc
+        if not any(address in ipaddress.ip_network(network) for network in
+                   ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")):
+            raise RuntimeError("服务器地址必须是内网 IPv4，已拒绝公网连接。")
         self.cfg = cfg
         self.log = log_func
 
@@ -1773,17 +1781,46 @@ class App(tk.Tk):
                 pass
 
     def run_bg(self, title: str, func):
+        if getattr(self, "_task_running", False):
+            messagebox.showwarning("任务进行中", "请等待当前任务完成后再操作。")
+            return
+        self._task_running = True
+        self._task_widget_states = []
+        pending = list(self.winfo_children())
+        while pending:
+            widget = pending.pop()
+            pending.extend(widget.winfo_children())
+            if isinstance(widget, (ttk.Button, ttk.Entry, ttk.Combobox, ttk.Checkbutton,
+                                   ttk.Radiobutton, tk.Checkbutton, tk.Radiobutton,
+                                   tk.Button, tk.Entry, tk.Listbox, tk.Text)):
+                if widget in getattr(self, "log_text_widgets", []):
+                    continue
+                state = widget.cget("state")
+                self._task_widget_states.append((widget, state))
+                widget.configure(state="disabled")
+
+        def finish(error=None):
+            for widget, state in self._task_widget_states:
+                if widget.winfo_exists():
+                    widget.configure(state=state)
+            self._task_widget_states = []
+            self._task_running = False
+            if error is None:
+                messagebox.showinfo("完成", f"{title} 完成")
+            else:
+                messagebox.showerror("失败", f"{title} 失败：\n{error}")
+
         def worker():
-            self.log(f"开始：{title}")
             try:
+                self.log(f"开始：{title}")
                 func()
                 self.log(f"完成：{title}")
-                self.after(0, lambda: messagebox.showinfo("完成", f"{title} 完成"))
+                self.after(0, finish)
             except Exception as e:
                 tb = traceback.format_exc()
                 self.log(f"失败：{title}：{e}")
                 self.log(tb)
-                self.after(0, lambda: messagebox.showerror("失败", f"{title} 失败：\n{e}"))
+                self.after(0, lambda error=str(e): finish(error))
         threading.Thread(target=worker, daemon=True).start()
 
     def open_wind_tool(self):
@@ -2274,6 +2311,8 @@ class App(tk.Tk):
             backup = backup_original_name(downloaded)
             backup_stat = backup.stat()
             backup_meta = {
+                "host": self.cfg.host,
+                "port": self.cfg.port,
                 "remote_file": self.cfg.remoteFile,
                 "remote_dir": self.cfg.remoteDir,
                 "remote_backup_file": remote_backup,
@@ -2319,6 +2358,16 @@ class App(tk.Tk):
                     raise RuntimeError("backup 目录没有备份 MAP，无法恢复。")
                 latest = backups[0]
             latest_mtime = format_file_time(latest.stat().st_mtime)
+            try:
+                latest.resolve().relative_to(farm_runtime_dir("backup").resolve())
+            except ValueError:
+                raise RuntimeError("备份文件不属于当前风场，已停止恢复。")
+            if marker.exists():
+                saved = json.loads(marker.read_text(encoding="utf-8"))
+                expected = {"host": self.cfg.host, "port": self.cfg.port,
+                            "remote_dir": self.cfg.remoteDir, "remote_file": self.cfg.remoteFile}
+                if any(key in saved and str(saved[key]) != str(value) for key, value in expected.items()):
+                    raise RuntimeError("备份记录的服务器或文件路径与当前设置不同，已停止恢复。")
             if not backup_mtime_text:
                 backup_mtime_text = latest_mtime
             self.log(f"使用最近备份恢复：{latest}")
@@ -2404,6 +2453,9 @@ class App(tk.Tk):
             self.mapping_info_var.set(f"读取失败：{e}")
 
     def on_close(self):
+        if getattr(self, "_task_running", False):
+            messagebox.showwarning("任务进行中", "任务尚未完成，请等待完成后再关闭，避免中断服务器文件操作。")
+            return
         try:
             self.save_settings_no_popup()
             save_relations_for_scope("local", self.local_relations)
@@ -2652,6 +2704,10 @@ def _legacy_summary_name(file_name: str, relations: List[Relation], stamp: Optio
 def run_local_simulation(cfg: Config, relations: List[Relation], local_map: Path, target_map: Optional[Path], extra_rules_text: str, log_func) -> Tuple[Path, Path, int]:  # type: ignore[override]
     if not local_map.exists():
         raise RuntimeError(f"本机 MAP 不存在：{local_map}")
+    if target_map is not None:
+        target_map = validate_current_farm_map_path(target_map, "目标正常 MAP")
+        if not target_map.is_file():
+            raise RuntimeError(f"目标正常 MAP 不存在：{target_map}")
     save_extra_rules_text(extra_rules_text)
     backup = backup_original_name(local_map) if local_map.name == cfg.remoteFile else backup_file(local_map, "local_before_sim")
     log_func(f"已备份本机 MAP：{backup}")
@@ -3527,6 +3583,9 @@ def wind_farm_summary() -> str:  # type: ignore[override]
 
 
 def _v6_switch_wind_farm(self):
+    if getattr(self, "_task_running", False):
+        self.wind_farm_var.set(get_current_wind_farm())
+        return
     name = self.wind_farm_var.get().strip() if hasattr(self, "wind_farm_var") else get_current_wind_farm()
     if not name:
         return

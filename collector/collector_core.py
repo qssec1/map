@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ctypes
+import ftplib
 import ipaddress
 import json
 import os
@@ -492,6 +493,9 @@ def copy_local_atomic(
                 progress(len(block))
     if temporary.stat().st_size != size:
         raise CollectorError(f"源文件读取不完整，已保留断点：{source}")
+    completed_stat = source.stat()
+    if completed_stat.st_size != size or completed_stat.st_mtime_ns != modified:
+        raise CollectorError(f"源文件在拷取期间发生变化，已保留断点：{source}")
     shutil.copystat(source, temporary)
     os.replace(temporary, destination)
     metadata_path.unlink(missing_ok=True)
@@ -578,15 +582,26 @@ def copy_ftp_atomic(
 
         try:
             ftp.retrbinary(f"RETR {remote_path}", write_block, blocksize=chunk_size, rest=offset or None)
-        except Exception:
-            if not offset:
+        except CancelledError:
+            raise
+        except ftplib.error_perm as exc:
+            if not offset or str(exc)[:3] not in {"500", "501", "502", "504"}:
                 raise
-            temporary.unlink(missing_ok=True)
-            metadata_path.unlink(missing_ok=True)
-            raise CollectorError(f"FTP 服务器不支持断点续传，已清理断点：{remote_path}")
+            writer.seek(0)
+            writer.truncate()
+            offset = 0
+            ftp.retrbinary(f"RETR {remote_path}", write_block, blocksize=chunk_size)
 
     if temporary.stat().st_size != size:
         raise CollectorError(f"FTP 文件读取不完整，已保留断点：{remote_path}")
+    ftp.voidcmd("TYPE I")
+    if int(ftp.size(remote_path) or 0) != size:
+        raise CollectorError(f"FTP 文件在下载期间发生变化，已保留断点：{remote_path}")
+    if modified:
+        response = ftp.sendcmd(f"MDTM {remote_path}")
+        completed_modified = int(datetime.strptime(response.split()[-1][:14], "%Y%m%d%H%M%S").timestamp())
+        if completed_modified != modified:
+            raise CollectorError(f"FTP 文件在下载期间发生变化，已保留断点：{remote_path}")
     os.replace(temporary, destination)
     metadata_path.unlink(missing_ok=True)
     return CopyResult(remote_path, destination, size, "copied", offset)

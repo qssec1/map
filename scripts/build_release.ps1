@@ -1,5 +1,6 @@
 param(
-    [string]$Python = "python"
+    [string]$Python = "python",
+    [string]$OutputDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,40 +11,29 @@ Set-Location $root
 & (Join-Path $PSScriptRoot "build_collector.ps1") -Python $Python
 
 $releaseRoot = Join-Path $root "release"
-$releaseDir = Join-Path $releaseRoot "MapFanSim"
-
-Get-Process MapFanSim -ErrorAction SilentlyContinue | Stop-Process -Force
-
-foreach ($path in @("build", "dist", "release", "发布成品", "鍙戝竷鎴愬搧")) {
-    $target = Join-Path $root $path
-    if (Test-Path $target) {
-        Remove-Item -Recurse -Force -LiteralPath $target
-    }
-}
+$buildStamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+$releaseDir = if ($OutputDirectory) { [IO.Path]::GetFullPath($OutputDirectory) } else { Join-Path $releaseRoot "MapFanSim_$buildStamp" }
+if (Test-Path -LiteralPath $releaseDir) { throw "Output directory already exists: $releaseDir" }
+$buildDir = Join-Path $root "build\release_$buildStamp"
+$distDir = Join-Path $root "dist\release_$buildStamp"
 
 & $Python -m PyInstaller `
     --noconfirm `
     --clean `
     --windowed `
     --name MapFanSim `
-    --add-data "data;data" `
-    --add-data "input_maps;input_maps" `
-    --add-data "output_maps;output_maps" `
-    --add-data "download;download" `
-    --add-data "update;update" `
-    --add-data "backup;backup" `
-    --add-data "reports;reports" `
-    --add-data "logs;logs" `
-    --add-data "rules;rules" `
+    --workpath $buildDir `
+    --distpath $distDir `
     --hidden-import paramiko `
     --hidden-import bcrypt `
     --hidden-import cryptography `
     --hidden-import openpyxl `
     --hidden-import xlrd `
     src\MapFanSim.py
+if ($LASTEXITCODE -ne 0) { throw "Main application build failed" }
 
 New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
-Copy-Item -Recurse -Force -LiteralPath (Join-Path $root "dist\MapFanSim") -Destination $releaseDir
+Copy-Item -Recurse -LiteralPath (Join-Path $distDir "MapFanSim") -Destination $releaseDir
 
 foreach ($dir in @("rules", "input_maps")) {
     $src = Join-Path $root $dir

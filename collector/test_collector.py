@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 
 import io
+import os
+import ftplib
 import stat
 import tempfile
 import unittest
@@ -21,6 +23,7 @@ from collector_core import (
     classify_master_file,
     compact_master_fan_input,
     copy_local_atomic,
+    copy_ftp_atomic,
     copy_sftp_atomic,
     iter_dates,
     master_file_selected,
@@ -972,6 +975,89 @@ class OutputTests(unittest.TestCase):
             self.assertEqual(require_transfer_space(Path("D:/data"), 1024**3), free)
             with self.assertRaises(InsufficientSpaceError):
                 require_transfer_space(Path("D:/data"), 2 * 1024**3)
+
+
+class TransferIntegrityTests(unittest.TestCase):
+    def test_local_changed_source_does_not_replace_existing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            target = Path(directory) / "target"
+            source.write_bytes(b"abcdefgh")
+            target.write_bytes(b"old")
+            initial = source.stat()
+
+            def change_source(_count):
+                os.utime(source, ns=(initial.st_atime_ns, initial.st_mtime_ns + 1000000000))
+
+            with self.assertRaisesRegex(CollectorError, "发生变化"):
+                copy_local_atomic(source, target, True, progress=change_source, chunk_size=4)
+            self.assertEqual(target.read_bytes(), b"old")
+            self.assertTrue(target.with_name("target.part").exists())
+
+    def test_ftp_disconnect_keeps_resumable_data_and_cancel_type(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+
+            class Ftp:
+                failure = OSError("disconnected")
+                offsets = []
+                def voidcmd(self, cmd): pass
+                def size(self, path): return 12
+                def sendcmd(self, cmd): return "213 20260918000000"
+                def retrbinary(self, cmd, callback, blocksize, rest=None):
+                    self.offsets.append(rest)
+                    callback(b"abcd")
+                    raise self.failure
+
+            ftp = Ftp()
+            for error in (OSError, CancelledError):
+                ftp.failure = error("interrupted")
+                with self.assertRaises(error):
+                    copy_ftp_atomic(ftp, "/log/data", target, False)
+            self.assertEqual(ftp.offsets, [None, 4])
+            self.assertEqual(target.with_name("target.part").stat().st_size, 8)
+            self.assertFalse(target.exists())
+
+    def test_ftp_unsupported_rest_restarts_without_append(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+
+            class Ftp:
+                calls = 0
+                def voidcmd(self, cmd): pass
+                def size(self, path): return 8
+                def sendcmd(self, cmd): return "213 20260918000000"
+                def retrbinary(self, cmd, callback, blocksize, rest=None):
+                    self.calls += 1
+                    if self.calls == 1:
+                        callback(b"abcd")
+                        raise OSError("disconnected")
+                    if rest:
+                        raise ftplib.error_perm("502 REST unsupported")
+                    callback(b"abcdefgh")
+
+            ftp = Ftp()
+            with self.assertRaises(OSError):
+                copy_ftp_atomic(ftp, "/log/data", target, False)
+            copy_ftp_atomic(ftp, "/log/data", target, False)
+            self.assertEqual(target.read_bytes(), b"abcdefgh")
+
+    def test_ftp_changed_source_is_not_published(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+
+            class Ftp:
+                complete = False
+                def voidcmd(self, cmd): pass
+                def size(self, path): return 4
+                def sendcmd(self, cmd): return "213 2026091800000" + ("1" if self.complete else "0")
+                def retrbinary(self, cmd, callback, blocksize, rest=None):
+                    callback(b"abcd")
+                    self.complete = True
+
+            with self.assertRaisesRegex(CollectorError, "发生变化"):
+                copy_ftp_atomic(Ftp(), "/log/data", target, False)
+            self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":
