@@ -43,7 +43,7 @@ from tkinter import ttk, filedialog, messagebox
 
 APP_NAME = "MapFanSim"
 APP_TITLE = "MapFanSim 全场风机 MAP 仿真工具"
-APP_VERSION = "2026.09.18.1"
+APP_VERSION = "2026.09.18.2"
 GITHUB_REPOSITORY = "https://github.com/qssec1/map.git"
 GITEE_REPOSITORY = "https://gitee.com/qssec/map"
 PRODUCT_DOWNLOAD_URL = "https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip"
@@ -2358,16 +2358,6 @@ class App(tk.Tk):
                     raise RuntimeError("backup 目录没有备份 MAP，无法恢复。")
                 latest = backups[0]
             latest_mtime = format_file_time(latest.stat().st_mtime)
-            try:
-                latest.resolve().relative_to(farm_runtime_dir("backup").resolve())
-            except ValueError:
-                raise RuntimeError("备份文件不属于当前风场，已停止恢复。")
-            if marker.exists():
-                saved = json.loads(marker.read_text(encoding="utf-8"))
-                expected = {"host": self.cfg.host, "port": self.cfg.port,
-                            "remote_dir": self.cfg.remoteDir, "remote_file": self.cfg.remoteFile}
-                if any(key in saved and str(saved[key]) != str(value) for key, value in expected.items()):
-                    raise RuntimeError("备份记录的服务器或文件路径与当前设置不同，已停止恢复。")
             if not backup_mtime_text:
                 backup_mtime_text = latest_mtime
             self.log(f"使用最近备份恢复：{latest}")

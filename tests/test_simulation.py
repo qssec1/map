@@ -113,7 +113,7 @@ class SimulationTests(unittest.TestCase):
             app.App.task_cancel_full_farm_simulation(state)
             remote.return_value.upload.assert_called_once_with(source.resolve())
 
-    def test_restore_preserves_backup_mtime_and_rejects_foreign_marker(self):
+    def test_restore_preserves_backup_mtime_and_allows_shared_backup(self):
         import json
         import os
         app.set_current_wind_farm(app.DEFAULT_WIND_FARM)
@@ -128,11 +128,13 @@ class SimulationTests(unittest.TestCase):
             app.App.task_restore_backup(state)
             restored = remote.return_value.upload.call_args.args[0]
             self.assertEqual(restored.stat().st_mtime, 1600000000)
-            marker.write_text(json.dumps({"backup_file": str(backup), "host": "192.168.1.99"}), encoding="utf-8")
+            shared = app.DIRS["download"] / "shared.map"
+            shutil.copy2(backup, shared)
+            marker.write_text(json.dumps({"backup_file": str(shared), "host": "192.168.1.99"}), encoding="utf-8")
             remote.reset_mock()
-            with self.assertRaisesRegex(RuntimeError, "服务器"):
-                app.App.task_restore_backup(state)
-            remote.assert_not_called()
+            app.App.task_restore_backup(state)
+            remote.return_value.upload.assert_called_once_with(shared)
+            self.assertEqual(shared.stat().st_mtime, 1600000000)
 
 
 class BackgroundUiTests(unittest.TestCase):
