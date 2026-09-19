@@ -275,6 +275,97 @@ class SelectionTests(unittest.TestCase):
 
 
 class OutputTests(unittest.TestCase):
+    def test_incomplete_manifest_contains_only_failed_paths_without_credentials(self):
+        import json
+        with tempfile.TemporaryDirectory() as directory:
+            app = self._parallel_test_app()
+            plan = [dict(remote_path=f"/day/{name}", target=Path(directory) / name, size=7)
+                    for name in ("ok", "failed")]
+            app._save_incomplete_files(dict(destination=directory, password="not-for-report"),
+                                       plan, {"/day/failed"}, [])
+            report = next(Path(directory).glob("incomplete_*.json"))
+            data = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(len(data["files"]), 1)
+            self.assertEqual(data["files"][0]["source"], "/day/failed")
+            self.assertNotIn("not-for-report", report.read_text(encoding="utf-8"))
+
+    def test_many_files_reuse_three_sessions_without_missing_or_duplicate_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = self._parallel_test_app()
+            entries = [remote_entry(f"f{i}.bin", stat.S_IFREG | 0o644, i + 1) for i in range(120)]
+            files = {f"/day/{entry.filename}": bytes([i]) * (i + 1) for i, entry in enumerate(entries)}
+            sessions = []
+
+            def connect(_options):
+                sftp = TreeSftp({"/day": entries}, files=files)
+                sessions.append(sftp)
+                return SimpleNamespace(close=lambda: None), sftp
+
+            app._open_sftp_session = connect
+            plan = app._scan_sftp_tree(TreeSftp({"/day": entries}), "/day")
+            for item in plan:
+                item.update(target=Path(directory) / item["name"], status="test", kind="test")
+            result = app._transfer_sftp_plan({}, plan, "test", lambda _: None, lambda: None)
+            self.assertEqual(result, (120, 0, 0))
+            self.assertEqual(len(sessions), 3)
+            for item in plan:
+                self.assertEqual(item["target"].read_bytes(), files[item["remote_path"]])
+            loads = [sum(item["size"] for item in items) for _, items in app._build_transfer_units(plan)]
+            self.assertLessEqual(max(loads) - min(loads), 120)
+
+    def test_balancing_keeps_each_directory_together(self):
+        plan = [dict(remote_path=f"/{group}/{i}", relative_path=f"{group}/{i}",
+                     source_directory=f"/{group}", task_group=f"/{group}", size=group + 1)
+                for group in range(20) for i in range(5)]
+        units = WindCollectorApp._build_transfer_units(plan)
+        self.assertEqual(len(units), 3)
+        self.assertEqual(sum(len(items) for _, items in units), 100)
+        for group in range(20):
+            self.assertEqual(sum(any(item["task_group"] == f"/{group}" for item in items)
+                                 for _, items in units), 1)
+
+    def test_batched_parallel_failure_retries_only_failed_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = self._parallel_test_app()
+            app.cancel_event = SimpleNamespace(is_set=lambda: False, wait=lambda _: False)
+            entries = [remote_entry(f"f{i}", stat.S_IFREG | 0o644, 4) for i in range(30)]
+            files = {f"/day/{entry.filename}": b"data" for entry in entries}
+            calls = {}
+
+            class FlakySftp(TreeSftp):
+                def open(self, path, mode):
+                    calls[path] = calls.get(path, 0) + 1
+                    if path == "/day/f7" and calls[path] == 1:
+                        raise OSError("temporary disconnect")
+                    return super().open(path, mode)
+
+            app._open_sftp_session = lambda _: (SimpleNamespace(close=lambda: None), FlakySftp({"/day": entries}, files=files))
+            plan = app._scan_sftp_tree(TreeSftp({"/day": entries}), "/day")
+            for item in plan:
+                item.update(target=Path(directory) / item["name"], status="test", kind="test")
+            result = app._transfer_sftp_plan({}, plan, "test", lambda _: None, lambda: None)
+            self.assertEqual(result, (30, 0, 0))
+            self.assertEqual(calls["/day/f7"], 2)
+            self.assertTrue(all(count == 1 for path, count in calls.items() if path != "/day/f7"))
+            self.assertTrue(all(item["target"].read_bytes() == b"data" for item in plan))
+
+    def test_local_outer_parallel_processes_every_group_without_nested_pool(self):
+        with tempfile.TemporaryDirectory() as directory:
+            app = self._parallel_test_app()
+            plan = []
+            for i in range(9):
+                source = Path(directory) / f"source{i}"
+                source.write_bytes(bytes([i]))
+                plan.append(dict(source=source, remote_path=str(source), relative_path=source.name,
+                                 source_directory=str(source.parent), task_group=f"group{i}",
+                                 size=1, target=Path(directory) / "out" / source.name,
+                                 status="test", kind="test"))
+            with patch("app.ThreadPoolExecutor", side_effect=AssertionError("Nested pool")):
+                result = app._transfer_local_plan({"_parallel_child": True}, plan, "test", lambda _: None, lambda: None)
+            self.assertEqual(result, (9, 0, 0))
+            for item in plan:
+                self.assertEqual(item["target"].read_bytes(), item["source"].read_bytes())
+
     @staticmethod
     def _parallel_test_app():
         app = object.__new__(WindCollectorApp)

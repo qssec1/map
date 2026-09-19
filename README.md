@@ -115,6 +115,8 @@ MapFanSim.exe
 
 [下载 MapFanSim Windows 64 位最新成品](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64.zip)
 
+[下载 2026.09.19 日期版本](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64-v2026.09.19.zip)
+
 [下载 2026.09.18.2 日期版本](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64-v2026.09.18.2.zip)
 
 [下载 2026.09.18.1 日期版本](https://gitee.com/qssec/map/blob/master/artifacts/MapFanSim-windows-x64-v2026.09.18.1.zip)
@@ -157,3 +159,4 @@ data/config.json
 - [维护规范](docs/maintenance.md)
 - [2026.09.18.1 检查记录](docs/acceptance-2026.09.18.1.md)
 - [2026.09.18.2 检查记录](docs/acceptance-2026.09.18.2.md)
+- [2026.09.19 并发与数据考取检查记录](docs/acceptance-2026.09.19.md)

@@ -1581,14 +1581,25 @@ class WindCollectorApp(tk.Tk):
             group = str(item.get("task_group", item["source_directory"]))
             groups.setdefault(group, []).append(item)
         if len(groups) == 1 and len(plan) > 1:
-            return [
+            units = [
                 (f"文件 {item['relative_path']}", [item])
                 for item in sorted(plan, key=lambda value: value["remote_path"])
             ]
-        return [
-            (f"目录 {directory}", sorted(items, key=lambda value: value["remote_path"]))
-            for directory, items in sorted(groups.items())
-        ]
+        else:
+            units = [
+                (f"目录 {directory}", sorted(items, key=lambda value: value["remote_path"]))
+                for directory, items in sorted(groups.items())
+            ]
+        if len(units) <= SFTP_AUTO_WORKERS:
+            return units
+        # Keep whole directories together, but reuse one session per balanced lane.
+        lanes = [[] for _ in range(SFTP_AUTO_WORKERS)]
+        sizes = [0] * SFTP_AUTO_WORKERS
+        for label, items in sorted(units, key=lambda unit: sum(item.get("size", 0) for item in unit[1]), reverse=True):
+            lane = min(range(len(lanes)), key=lambda index: (sizes[index], len(lanes[index])))
+            lanes[lane].extend(items)
+            sizes[lane] += sum(item.get("size", 0) for item in items)
+        return [(f"任务组 {index + 1}", items) for index, items in enumerate(lanes) if items]
 
     @staticmethod
     def _close_sftp(client, sftp) -> None:
@@ -1598,6 +1609,22 @@ class WindCollectorApp(tk.Tk):
         finally:
             if client:
                 client.close()
+
+    def _save_incomplete_files(self, options, plan, failed_keys, failures):
+        if not failed_keys or not options.get("destination"):
+            return
+        errors = {item["remote_path"]: item.get("last_error", "传输未完成") for item in failures}
+        report = Path(options["destination"]) / f"incomplete_{time.time_ns()}.json"
+        data = {"files": [
+            {"source": item["remote_path"], "destination": str(item["target"]),
+             "expected_size": item["size"], "error": errors.get(item["remote_path"], "目标文件缺失或大小不符")}
+            for item in plan if item["remote_path"] in failed_keys
+        ]}
+        try:
+            save_json_atomic(report, data)
+            self._emit("log", f"未完成文件清单：{report}")
+        except OSError as exc:
+            self._emit("log", f"无法保存未完成清单：{exc}")
 
     def _copy_sftp_items(
         self,
@@ -1755,6 +1782,7 @@ class WindCollectorApp(tk.Tk):
             if not target.is_file() or target.stat().st_size != item["size"]:
                 failed_keys.add(item["remote_path"])
         if failed_keys:
+            self._save_incomplete_files(options, plan, failed_keys, final_failures)
             self._emit("log", f"{label}完整性校验未通过：{len(failed_keys)} 个文件未完整。")
             for item in final_failures:
                 self._emit(
@@ -1828,7 +1856,7 @@ class WindCollectorApp(tk.Tk):
         if not plan:
             return 0, 0, 0
         units = self._build_transfer_units(plan)
-        workers = min(SFTP_AUTO_WORKERS, len(units))
+        workers = 1 if options.get("_parallel_child") else min(SFTP_AUTO_WORKERS, len(units))
         copied = skipped = 0
         retry_units = []
         final_failures = []
@@ -1869,10 +1897,14 @@ class WindCollectorApp(tk.Tk):
                         retry_units.append((unit_label, failed_items))
                     refresh_progress()
         else:
-            unit_label, items = units[0]
-            copied, skipped, final_failures = self._copy_local_items(
-                options, unit_label, items, add_progress, 3
-            )
+            for unit_label, items in units:
+                unit_copied, unit_skipped, failed_items = self._copy_local_items(
+                    options, unit_label, items, add_progress, 3
+                )
+                copied += unit_copied
+                skipped += unit_skipped
+                final_failures.extend(failed_items)
+                refresh_progress()
 
         for unit_label, items in retry_units:
             self._emit("log", f"{unit_label}降级为顺序重试，已完成文件不会重复拷取。")
@@ -1895,6 +1927,7 @@ class WindCollectorApp(tk.Tk):
             if not target.is_file() or target.stat().st_size != item["size"]:
                 failed_keys.add(item["remote_path"])
         if failed_keys:
+            self._save_incomplete_files(options, plan, failed_keys, final_failures)
             self._emit("log", f"{label}完整性校验未通过：{len(failed_keys)} 个文件未完整。")
         else:
             self._emit("log", f"{label}完整性校验通过：{len(plan)} 个文件的路径和大小均正确。")
